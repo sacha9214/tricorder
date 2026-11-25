@@ -1,0 +1,173 @@
+// Textes de l'interface, FR/EN.
+const STRINGS = {
+  en: {
+    tagline: 'Heart rate from your webcam. Everything runs on your device: no video leaves this page.',
+    'src.camera': 'Start camera',
+    'src.file': 'Video file',
+    'src.demo': 'Demo',
+    'src.stop': 'Stop',
+    'hr.title': 'Heart rate',
+    'q.good': 'Good signal',
+    'q.fair': 'Fair signal',
+    'q.poor': 'Unreliable',
+    'q.none': 'Waiting',
+    'wave.title': 'Pulse wave, last 10 s',
+    'spec.title': 'Spectrum, 40–180 bpm',
+    'demo.bpm': 'Simulated heart rate',
+    'demo.flicker': 'Flickering light (2 %, at 78 bpm)',
+    'demo.truth': 'True value: {v} bpm',
+    'details.pos': 'POS {v}',
+    'details.green': 'green only {v}',
+    'details.fps': '{v} fps',
+    'details.px': '{v} skin px',
+    'tips.title': 'For a good reading',
+    'tips.1': 'Movement is corrected, but the stiller you are the faster and steadier the reading.',
+    'tips.2': 'Face daylight or a steady lamp; avoid flickering lights.',
+    'tips.3': 'Stay 40–60 cm from the camera, forehead and cheeks visible.',
+    'how.title': 'How it works',
+    'how.body':
+      'Each heartbeat pushes a little more blood into the skin, which absorbs a bit more green light. The change is about 0.1–1 % of pixel brightness. The page averages the skin pixels of your forehead and cheeks, separates the pulse from lighting changes with the POS algorithm (Wang et al., 2017), then finds the dominant frequency. The forehead and each cheek are measured separately and weighted by their signal quality, and hair or glare pixels are skipped.',
+    disclaimer: 'Experimental and educational. Not a medical device: do not use it to diagnose or monitor a health condition.',
+    'status.idle': 'Choose a source to start.',
+    'status.camera': 'Asking for camera access…',
+    'status.cameraDenied': 'Camera unavailable or access denied.',
+    'status.loadingModel': 'Loading the face model…',
+    'status.modelError': 'Could not load the face model (network?).',
+    'status.noFace': 'No face found. Face the camera.',
+    'status.warmup': 'Hold still… {s} s',
+    'status.motion': 'A lot of movement: readings may drop out.',
+    'status.weak': 'Signal too weak: more light, less movement.',
+    'status.ok': 'Measuring.',
+    'status.ended': 'Video finished.',
+    'status.demo': 'Demo: synthetic face with a known pulse.',
+    'details.title': 'Details',
+    'magnify.label': 'Magnify pulse',
+    'magnify.gain': 'Strength',
+    'magnify.hint': 'Color changes on the face are amplified so each heartbeat becomes visible. With the camera, readings pause: the pulsing screen would light your face at your own heart rate.',
+    'status.paused': 'Readings paused while magnifying.',
+    'rec.start': 'Record',
+    'rec.stop': 'Stop {s}',
+    'rec.title': 'Recording ready ({s} s)',
+    'rec.ref': 'Your reference heart rate (bpm)',
+    'rec.refHint': 'From a watch, an oximeter, or your pulse counted for 30 s × 2. It goes into the file name so the accuracy bench can compare.',
+    'rec.save': 'Save video',
+    'rec.discard': 'Discard',
+    'rec.error': 'Recording is not supported in this browser.',
+    'demo.hair': 'Hair over the forehead',
+    'zone.forehead': 'forehead',
+    'zone.cheekL': 'left cheek',
+    'zone.cheekR': 'right cheek',
+    'zone.palmL': 'left palm',
+    'zone.palmR': 'right palm',
+    'zone.neck': 'neck',
+    'zone.forearmL': 'left forearm',
+    'zone.forearmR': 'right forearm',
+    'zone.footL': 'left foot',
+    'zone.footR': 'right foot',
+    'extras.title': 'Extra zones',
+    'extras.hands': 'Hands (palms)',
+    'extras.body': 'Body (neck, forearms, feet)',
+    'extras.hint': 'More skin can mean a steadier reading. Only bare skin helps: clothed or hidden parts get almost no weight.',
+    'details.zones': 'zones',
+    'details.mixed': 'all pixels mixed {v}',
+    'bench.link': 'Accuracy bench →',
+  },
+  fr: {
+    tagline: 'Le pouls depuis ta webcam. Tout tourne sur ton appareil : aucune vidéo ne quitte cette page.',
+    'src.camera': 'Lancer la caméra',
+    'src.file': 'Fichier vidéo',
+    'src.demo': 'Démo',
+    'src.stop': 'Arrêter',
+    'hr.title': 'Fréquence cardiaque',
+    'q.good': 'Bon signal',
+    'q.fair': 'Signal moyen',
+    'q.poor': 'Pas fiable',
+    'q.none': 'En attente',
+    'wave.title': 'Onde de pouls, 10 dernières s',
+    'spec.title': 'Spectre, 40–180 bpm',
+    'demo.bpm': 'Pouls simulé',
+    'demo.flicker': 'Lumière qui scintille (2 %, à 78 bpm)',
+    'demo.truth': 'Valeur vraie : {v} bpm',
+    'details.pos': 'POS {v}',
+    'details.green': 'vert seul {v}',
+    'details.fps': '{v} i/s',
+    'details.px': '{v} px de peau',
+    'tips.title': 'Pour une bonne mesure',
+    'tips.1': 'Le mouvement est corrigé, mais plus tu restes immobile, plus la mesure est rapide et stable.',
+    'tips.2': 'Face à la lumière du jour ou une lampe stable ; évite les lumières qui scintillent.',
+    'tips.3': 'À 40–60 cm de la caméra, front et joues visibles.',
+    'how.title': 'Comment ça marche',
+    'how.body':
+      'À chaque battement, un peu plus de sang arrive dans la peau, qui absorbe alors un peu plus de lumière verte. La variation est d’environ 0,1 à 1 % de la luminosité. La page fait la moyenne des pixels de peau du front et des joues, sépare le pouls des variations de lumière avec l’algorithme POS (Wang et al., 2017), puis cherche la fréquence dominante. Le front et chaque joue sont mesurés à part et pondérés selon la qualité de leur signal, et les pixels de cheveux ou de reflets sont écartés.',
+    disclaimer: 'Expérimental et pédagogique. Ce n’est pas un dispositif médical : ne pas l’utiliser pour diagnostiquer ou surveiller un problème de santé.',
+    'status.idle': 'Choisis une source pour commencer.',
+    'status.camera': 'Demande d’accès à la caméra…',
+    'status.cameraDenied': 'Caméra indisponible ou accès refusé.',
+    'status.loadingModel': 'Chargement du modèle de visage…',
+    'status.modelError': 'Impossible de charger le modèle de visage (réseau ?).',
+    'status.noFace': 'Aucun visage trouvé. Mets-toi face à la caméra.',
+    'status.warmup': 'Ne bouge pas… {s} s',
+    'status.motion': 'Beaucoup de mouvement : la mesure peut s’interrompre.',
+    'status.weak': 'Signal trop faible : plus de lumière, moins de mouvement.',
+    'status.ok': 'Mesure en cours.',
+    'status.ended': 'Vidéo terminée.',
+    'status.demo': 'Démo : visage synthétique avec un pouls connu.',
+    'details.title': 'Détails',
+    'magnify.label': 'Amplifier le pouls',
+    'magnify.gain': 'Intensité',
+    'magnify.hint': 'Les variations de couleur du visage sont amplifiées pour rendre chaque battement visible. Avec la caméra, la mesure se met en pause : l’écran qui pulse éclairerait ton visage à ton propre rythme.',
+    'status.paused': 'Mesure en pause pendant l’amplification.',
+    'rec.start': 'Enregistrer',
+    'rec.stop': 'Arrêter {s}',
+    'rec.title': 'Enregistrement prêt ({s} s)',
+    'rec.ref': 'Ton pouls de référence (bpm)',
+    'rec.refHint': 'Lu sur une montre, un oxymètre, ou compté au poignet 30 s × 2. Il est mis dans le nom du fichier pour que le banc d’essai puisse comparer.',
+    'rec.save': 'Enregistrer la vidéo',
+    'rec.discard': 'Jeter',
+    'rec.error': 'L’enregistrement n’est pas pris en charge par ce navigateur.',
+    'demo.hair': 'Mèches sur le front',
+    'zone.forehead': 'front',
+    'zone.cheekL': 'joue gauche',
+    'zone.cheekR': 'joue droite',
+    'zone.palmL': 'paume gauche',
+    'zone.palmR': 'paume droite',
+    'zone.neck': 'cou',
+    'zone.forearmL': 'avant-bras gauche',
+    'zone.forearmR': 'avant-bras droit',
+    'zone.footL': 'pied gauche',
+    'zone.footR': 'pied droit',
+    'extras.title': 'Zones en plus',
+    'extras.hands': 'Mains (paumes)',
+    'extras.body': 'Corps (cou, avant-bras, pieds)',
+    'extras.hint': 'Plus de peau peut rendre la mesure plus stable. Seule la peau nue aide : une partie habillée ou cachée ne compte presque pas.',
+    'details.zones': 'zones',
+    'details.mixed': 'tous pixels mélangés {v}',
+    'bench.link': 'Banc d’essai →',
+  },
+};
+
+let lang = 'en';
+try {
+  lang = localStorage.getItem('tricorder.lang') || (navigator.language || '').slice(0, 2);
+} catch {
+  lang = (navigator.language || '').slice(0, 2);
+}
+if (!STRINGS[lang]) lang = 'en';
+
+export const getLang = () => lang;
+
+export function setLang(l) {
+  lang = STRINGS[l] ? l : 'en';
+  try { localStorage.setItem('tricorder.lang', lang); } catch { /* stockage indisponible */ }
+  document.documentElement.lang = lang;
+  applyI18n();
+}
+
+export function t(key, vars = {}) {
+  const s = STRINGS[lang][key] ?? STRINGS.en[key] ?? key;
+  return s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
+}
+
+export function applyI18n(root = document) {
+  for (const el of root.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+}

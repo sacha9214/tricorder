@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tricorder Bench</title>
+  <meta name="description" content="Measure the tricorder's accuracy on recorded videos with a known reference heart rate.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M2 17h7l3-8 5 16 4-12 2 4h7' fill='none' stroke='%23ff5f6d' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 17h7l3-8 5 16 4-12 2 4h7" /></svg>
+      <h1>Tricorder bench</h1>
+    </div>
+    <p class="tagline">Accuracy on your recordings. Videos are analyzed frame by frame in this page; nothing is uploaded.</p>
+    <a class="btn ghost" href="./">← Tricorder</a>
+  </header>
+
+  <main class="bench">
+    <section class="card">
+      <h2>1. Add recordings</h2>
+      <p class="muted">Record with the <strong>Record</strong> button on the main page while noting your real heart rate (watch, oximeter, or pulse counted for 30 s × 2). The reference is read from file names like <code>…_72bpm.webm</code>; you can also type it below.</p>
+      <div class="controls">
+        <button type="button" class="btn primary" id="pick">Choose videos</button>
+        <input type="file" id="files" accept="video/*" multiple hidden>
+        <button type="button" class="btn" id="run" disabled>Run analysis</button>
+        <button type="button" class="btn ghost" id="csv" disabled>Export CSV</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2. Per video</h2>
+      <div class="table-wrap">
+        <table id="videos">
+          <thead><tr><th>File</th><th>Reference</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <video id="video" muted playsinline hidden></video>
+    </section>
+
+    <section class="card">
+      <h2>3. Summary by method</h2>
+      <p class="muted">Each video gives one value per method: the median of the readings the page would have shown. <strong>Error</strong> uses videos with a reference only. <strong>Coverage</strong> is the share of time a reading was shown at all.</p>
+      <div class="table-wrap">
+        <table id="summary">
+          <thead><tr><th>Method</th><th>Mean error</th><th>RMS error</th><th>Within 5 bpm</th><th>Coverage</th><th>Videos</th></tr></thead>
+          <tbody><tr><td colspan="6" class="muted">No results yet.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>4. Bland–Altman plot (full pipeline)</h2>
+      <p class="muted">Each dot is a video: horizontal = average of tricorder and reference, vertical = tricorder − reference. The dashed lines are the mean bias and the 95 % limits of agreement (bias ± 1.96 SD).</p>
+      <canvas class="plot tall" id="ba"></canvas>
+    </section>
+  </main>
+
+  <footer class="disclaimer">Experimental and educational. Not a medical device.</footer>
+  <script type="module" src="js/bench.js"></script>
+</body>
+</html>

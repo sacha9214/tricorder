@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+# Recordings contain faces: never commit them.
+recordings/
+*.webm
+*.mp4
+*.avi
+.claude/
