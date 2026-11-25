@@ -17,6 +17,7 @@ const CONFIGS = [
   ['none', { motion: null }],
   ['colors linear', { motion: { domain: 'rgb', quad: false } }],
   ['colors +squares', { motion: { domain: 'rgb', quad: true } }],
+  ['colors linear, gated (default)', {}],
 ];
 for (const [label, opts] of CONFIGS) {
   const row = [];

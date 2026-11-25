@@ -402,6 +402,7 @@ function updateStatusFromResult(r) {
     return state.samples.length ? setStatus('status.warmup', { s: left }) : null;
   }
   if (state.mode === 'demo') return setStatus('status.demo');
+  if (r.quality !== 'poor' && r.moving) return setStatus('status.movingOk');
   setStatus(r.quality === 'poor' ? 'status.weak' : 'status.ok');
 }
 

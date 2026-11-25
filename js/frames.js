@@ -18,12 +18,18 @@ export async function videoDuration(v) {
 }
 
 // Itère sur les instants 0, 1/fps, 2/fps… ; l'image est prête à chaque pas.
+// Un serveur qui ne gère pas les requêtes partielles (Range) empêche le navigateur de se
+// déplacer dans la vidéo, mais l'événement « seeked » arrive quand même : sans contrôle,
+// on analyserait la même image des milliers de fois. On vérifie donc la position atteinte.
 export async function* videoFrames(v, fps = 30) {
   v.pause();
   const duration = await videoDuration(v);
   const step = 1 / fps;
   for (let time = 0; time < duration - step / 2; time += step) {
     await seekTo(v, time);
+    if (Math.abs(v.currentTime - time) > 0.25) {
+      throw new Error(`seek failed: asked ${time.toFixed(2)} s, got ${v.currentTime.toFixed(2)} s (server without Range support?)`);
+    }
     yield { time, duration };
   }
 }

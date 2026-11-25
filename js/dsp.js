@@ -366,7 +366,35 @@ function pulseOf(rs, fs, method, mc = null) {
 // Sur 320 essais simulés : 204 justes contre 130 sans correction, 4 valeurs fausses
 // affichées contre 38. Régresser le signal de pouls après POS, ou ajouter les carrés,
 // ou ignorer les fréquences du mouvement : pas mieux, parfois pire.
-export const DEFAULT_MOTION = { domain: 'rgb', quad: false };
+export const DEFAULT_MOTION = { domain: 'rgb', quad: false, gate: true };
+
+// Porte de mouvement : on ne corrige que si la tête bouge vraiment. Sur de vraies vidéos
+// d'une personne immobile (MCD-rPPG), corriger quand même faisait perdre des mesures : la
+// tête bouge très légèrement à chaque battement (balistocardiographie) et le suivi tremble,
+// si bien que la régression retirait une partie du pouls. Seuils (écart-type sur la fenêtre,
+// tendance linéaire retirée) placés entre le maximum mesuré immobile (x 0,4 %, y 1,3 %,
+// rotation 1,8 %, bouche 1,6 %) et le minimum des scénarios en mouvement simulés.
+// Indices : x, y (fraction de l'image), rotation (proxy), bouche — voir extract.js.
+export const MOTION_GATE = [[0, 0.01], [1, 0.015], [4, 0.03], [6, 0.03]];
+
+function detrendedStd(c) {
+  const n = c.length, mx = (n - 1) / 2;
+  let m = 0;
+  for (let i = 0; i < n; i++) m += c[i] / n;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (i - mx) * (c[i] - m); sxx += (i - mx) ** 2; }
+  const b = sxy / sxx;
+  let v = 0;
+  for (let i = 0; i < n; i++) v += (c[i] - m - b * (i - mx)) ** 2;
+  return Math.sqrt(v / n);
+}
+
+// Score de mouvement : max des écarts-types rapportés à leur seuil (> 1 = en mouvement).
+export function motionScore(cols) {
+  let score = 0;
+  for (const [i, thr] of MOTION_GATE) if (cols[i]) score = Math.max(score, detrendedStd(cols[i]) / thr);
+  return score;
+}
 
 // motion : correction du mouvement à partir des signaux de suivi (s.motion pour la tête,
 // s.zones[z].m pour une zone qui bouge à part, comme une main) ;
@@ -379,8 +407,12 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
   const tStart = Math.max(samples[0].t, tEnd - window);
   const rs = resampleRange(samples, fs, tStart, tEnd);
 
-  let mc = null, mask = null;
+  let mc = null, mask = null, moving = false;
   if (motion && samples[samples.length - 1].motion) {
+    const cols = resampleColumns(samples, fs, tStart, tEnd, (s) => s.motion);
+    moving = motionScore(cols) > 1;
+  }
+  if (motion && samples[samples.length - 1].motion && (moving || !motion.gate)) {
     const cols = resampleColumns(samples, fs, tStart, tEnd, (s) => s.motion);
     const X = motionRegressors(cols, { quad: motion.quad, band: true, fs });
     mc = {
@@ -419,12 +451,14 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
       if (list.length < 2 || list.length < 0.8 * total) { parts.push(null); continue; }
       // Une zone qui bouge à part (main, pied) est corrigée avec son propre mouvement.
       let zmc = mc;
-      if (mc && list[0].m && samples[samples.length - 1].zones[z]?.m) {
+      if (motion && list[0].m && samples[samples.length - 1].zones[z]?.m) {
         const cols = resampleColumns(list, fs, tStart, tEnd, (x) => x.m);
-        zmc = {
-          domain: mc.domain,
+        // Main, avant-bras, pied : même porte, sur sa propre position (x, y).
+        const partMoving = motionScore([cols[0], cols[1]]) > 1;
+        zmc = !partMoving && motion.gate ? null : {
+          domain: motion.domain ?? null,
           X: motionRegressors(cols, { quad: motion.quad, band: true, fs }),
-          Xraw: mc.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs }) : [],
+          Xraw: motion.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs }) : [],
         };
       }
       const p = pulseOf(resampleRange(list, fs, tStart, tEnd), fs, 'pos', zmc);
@@ -464,6 +498,7 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
     power: fin.power,
     df: fin.df,
     motionCorrected: !!mc,
+    moving,
     method: used,
     zones,
     combinedBpm: combined.bpm,
@@ -477,7 +512,9 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
 // fenêtre indépendamment, on cherche le pic près de la valeur précédente (a priori gaussien) ;
 // on ne saute vers un autre pic que s'il gagne plusieurs fenêtres de suite.
 export class HrTracker {
-  constructor({ sigma = 6, switchAfter = 4, staleAfter = 5 } = {}) {
+  // staleAfter = 2 s : sur vraies vidéos, garder la valeur 5 s affichait 3 % de valeurs fausses
+  // (plus de 5 bpm d'écart) ; 2 s, 1 %, pour presque autant de temps couvert.
+  constructor({ sigma = 6, switchAfter = 4, staleAfter = 2 } = {}) {
     this.sigma = sigma;           // bpm
     this.switchAfter = switchAfter; // fenêtres consécutives
     this.staleAfter = staleAfter; // s sans mesure fiable → valeur périmée

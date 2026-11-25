@@ -34,8 +34,12 @@ export function faceRegions(landmarks, w, h) {
 
   const brow = mul(add(p(L.browA), p(L.browB)), 0.5);
   const up = sub(p(L.top), brow); // des sourcils vers le haut du front
-  const forehead = { kind: 'rect', c: add(brow, mul(up, 0.5)), w: 0.8 * d, h: Math.max(4, 0.6 * Math.abs(dot(up, uy))), angle };
-  const r = 0.16 * d;
+  // Tailles choisies sur de vraies vidéos (MCD-rPPG, visage petit dans l'image) : agrandir
+  // les zones a fait passer les mesures affichées de 83 % à 98 % (repos) et de 47 % à 81 %
+  // (après effort). Les bords touchent sourcils et cheveux : le filtre de peau les retire.
+  // Réglé sur une seule personne pour l'instant : à confirmer sur d'autres.
+  const forehead = { kind: 'rect', c: add(brow, mul(up, 0.5)), w: 1.25 * d, h: Math.max(4, 1.35 * Math.abs(dot(up, uy))), angle };
+  const r = 0.36 * d;
   const cheekA = { kind: 'ellipse', c: p(L.cheekA), rx: r, ry: r * 1.15, angle };
   const cheekB = { kind: 'ellipse', c: p(L.cheekB), rx: r, ry: r * 1.15, angle };
 
@@ -228,7 +232,7 @@ export class Extractor {
       const mk = m.getImageData(x0, y0, bw, bh).data;
       if (this.buf.r.length < bw * bh) this.buf = { r: new Float32Array(bw * bh), g: new Float32Array(bw * bh), b: new Float32Array(bw * bh) };
       const { r: br, g: bg, b: bb } = this.buf;
-      let k = 0;
+      let k = 0, zr = 0, zg = 0, zb = 0;
       for (let i = 0; i < px.length; i += 4) {
         if (mk[i + 3] < 128) continue;
         inside++;
@@ -236,11 +240,14 @@ export class Extractor {
         // Pixels saturés : pas d'information sur le pouls.
         if (r > 250 || g > 250 || b > 250) { clipped++; continue; }
         rr += r; rg += g; rb += b;
+        zr += r; zg += g; zb += b;
         br[k] = r; bg[k] = g; bb[k] = b; k++;
       }
       cand += k;
       const res = this.filters[z].apply(br, bg, bb, k);
-      zones.push(res ? { r: res.r, g: res.g, b: res.b, n: res.n, ...(reg.m ? { m: reg.m } : {}) } : null);
+      // raw : moyenne de la zone sans filtre de peau (pour comparer sur le banc d'essai).
+      const raw = k ? { r: zr / k, g: zg / k, b: zb / k, n: k } : null;
+      zones.push(res ? { r: res.r, g: res.g, b: res.b, n: res.n, raw, ...(reg.m ? { m: reg.m } : {}) } : null);
       if (res) { sr += res.r * res.n; sg += res.g * res.n; sb += res.b * res.n; n += res.n; }
     });
     if (!n) return null;

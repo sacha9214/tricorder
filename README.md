@@ -21,7 +21,28 @@ Each heartbeat pushes a little more blood into the skin, which then absorbs slig
 7. **Tracking.** The rate is followed across windows, so a noise peak in one window doesn't make the number jump.
 8. **Pulse magnification** (Wu et al., 2012). Color changes are band-passed around the measured rate, smoothed spatially, amplified and added back on the face.
 
-## What each improvement buys
+## Tested on real people
+
+[MCD-rPPG](https://huggingface.co/datasets/kyegorov/mcd_rppg) (CC-BY-4.0) pairs face videos with a finger pulse sensor. Subject 1020 was tested with the frontal webcam, 3 minutes at rest and 3 minutes after 15 squats. Each 12 s window was compared with the reference heart rate. The reference was computed from the sensor two ways (frequency and beat counting), and only windows where both agree were scored: 301 and 273 windows.
+
+| Method | Rest: shown / error / wrong | After squats: shown / error / wrong |
+|---|---|---|
+| Green only | 31 % / 2.1 bpm / 6 | 19 % / 3.5 bpm / 4 |
+| POS, all pixels | 94 % / 0.6 / 0 | 72 % / 0.6 / 0 |
+| **Full pipeline** | **100 % / 0.5 / 0** | **91 % / 0.7 / 1** |
+
+*Shown* is the share of windows where a reading was displayed (the rest are flagged unreliable). *Wrong* counts readings more than 5 bpm off.
+
+**Caveat:** the settings below were tuned on this subject, so these numbers are optimistic until other subjects confirm them.
+
+Real data overturned several conclusions from simulation:
+- **Zone size matters most.** The face is small in this video, and 1.5–2× bigger zones raised correct estimates from about 90 % to 98 %.
+- **The tight skin filter lost readings** on compressed video (83 % → 40 % shown). A wider tolerance fixed it, and with big zones the filter now helps by dropping eyebrows and hair at the edges.
+- **Motion correction on a still person hurt** (91 % → 85 % shown). The head moves slightly with every heartbeat (ballistocardiography), and face tracking jitters, so the regression removed some pulse. Correction now runs only when the head clearly moves. The gate sits between the largest movement measured on still people and the smallest in the moving simulations.
+- **Tracking kept stale values too long.** Holding a value 5 s showed 3 % wrong readings; 2 s shows 1 %.
+- **A silent bug:** with a server that doesn't support Range requests, browser seeks "succeed" without moving, so every frame analyzed was the first one. Frame reading now checks the position it actually reached.
+
+## What each improvement buys (simulated)
 
 Each one was kept only if it beat the previous method on a case built to break that method. The scripts in `tools/` reproduce the numbers.
 
@@ -33,7 +54,7 @@ Each one was kept only if it beat the previous method on a case built to break t
 | Tracking | noisy 40 s signal | 154 / 512 correct readings shown | 255 / 512 |
 | Motion correction | head moving in colored light: random, talking, turns, exercise (320 runs) | 130 correct, 38 wrong shown | 204 correct, 4 wrong shown |
 
-On two test videos of a real face photo moved through colored light (irregular motion at 76 bpm, exercise bobbing at 120 bpm), the full pipeline averaged **0.2 bpm error with a reading 98 % of the time**, vs 73 % for plain POS. The green-only method read 45 bpm on the exercise video.
+On two test videos of a real face photo moved through colored light (irregular motion at 76 bpm, exercise bobbing at 120 bpm), the full pipeline averaged **0.2 bpm error with a reading 98 % of the time**, vs 73 % for plain POS. Real moving footage with a reference is still missing. The green-only method read 45 bpm on the exercise video.
 
 Some ideas were measured and rejected:
 - Weighting zones by SNR in dB was worse than plain mixing.
@@ -47,9 +68,11 @@ POS alone already cancels a *single* distortion, such as one moving light. The e
 
 `bench.html` runs recordings through six methods, from green-only to the full pipeline. It reports mean error, RMS error, share within 5 bpm, coverage and a Bland–Altman plot. Recordings come from the **Record** button: it saves the raw camera video locally, with your reference heart rate in the file name, e.g. `…_72bpm.webm`.
 
-**Not validated on real people yet.** Every number above comes from synthetic signals or synthetic pulses. To test it yourself, record with a reference (sports watch or finger pulse oximeter) and run the recordings through the bench.
+To test it yourself, record with a reference (sports watch or finger pulse oximeter) and run the recordings through the bench.
 
-Public datasets with a medical reference mostly require a signed academic agreement. The easiest open one is [MCD-rPPG](https://huggingface.co/datasets/kyegorov/mcd_rppg): CC-BY-4.0, no login, per-subject files, PPG + ECG, rest and post-exercise. It has no head motion.
+Public datasets with a medical reference mostly require a signed academic agreement. MCD-rPPG needs none, but it has no head motion. Dataset evaluation tools:
+- `tools/mcd-reference.mjs`, `tools/mcd-refcheck.mjs`: compute the reference per window.
+- `tools/eval-browser.js`: runs the extraction in the browser and scores each method.
 
 ## Run locally
 

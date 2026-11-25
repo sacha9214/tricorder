@@ -20,7 +20,9 @@ function histMedian(hist, count) {
 }
 
 export class SkinFilter {
-  constructor({ chromaTol = 0.035, lumLo = 0.6, lumHi = 1.5, ema = 0.1, minKept = 40, relockFrames = 30 } = {}) {
+  // Tolérances larges : sur de vraies vidéos compressées, le bruit de couleur est fort et une
+  // tolérance serrée (0,035) écartait de la vraie peau et faisait perdre des mesures.
+  constructor({ chromaTol = 0.06, lumLo = 0.5, lumHi = 1.7, ema = 0.1, minKept = 40, relockFrames = 30 } = {}) {
     Object.assign(this, { chromaTol, lumLo, lumHi, ema, minKept, relockFrames });
     this.hu = new Uint32Array(BINS);
     this.hv = new Uint32Array(BINS);
