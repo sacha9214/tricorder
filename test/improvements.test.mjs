@@ -241,3 +241,35 @@ test('part du mouvement à la fréquence retenue : présente seulement quand la 
   assert.ok(ex.moving);
   assert.ok(ex.motionAtPeak >= 0 && ex.motionAtPeak <= 1);
 });
+
+test('respiration : 15/min retrouvée à partir du mouvement de la tête et de la couleur', async () => {
+  const { estimateBreathing } = await import('../js/breath.js');
+  const rand = rng(11);
+  const s = [];
+  for (let i = 0; i < 40 * 30; i++) {
+    const t = i / 30, br = Math.sin(2 * Math.PI * 0.25 * t);
+    s.push({ t, r: 150, g: 100 * (1 + 0.002 * br) + 0.3 * gaussian(rand), b: 80,
+      motion: [0.4, 0.5 + 0.004 * br + 0.0005 * gaussian(rand), 0.08, 0, 0, 0.5 + 0.003 * br, 0.02] });
+  }
+  const r = estimateBreathing(s);
+  assert.ok(r.ready && near(r.rate, 15, 1.5), `rate=${r.rate}`);
+  assert.ok(r.clarity > 0.45, `clarity=${r.clarity}`);
+  // Sans respiration : bruit pur, pas de pic net.
+  const n = s.map((x) => ({ ...x, g: 100 + 0.3 * gaussian(rand), motion: x.motion.map((v, i) => (i === 1 || i === 5 ? 0.5 + 0.0005 * gaussian(rand) : v)) }));
+  const q = estimateBreathing(n);
+  assert.ok(q.clarity < 0.45, `noise clarity=${q.clarity}`);
+});
+
+test('lumière qui change : la référence de fond retire une lampe qui scintille dans la bande', () => {
+  // Lampe colorée qui scintille à 1,3 Hz sur la peau ET sur le mur du fond.
+  const flick = (t) => 0.02 * Math.sin(2 * Math.PI * 1.3 * t);
+  const s = synthZones([{ bpm: 70, seed: 1 }, { bpm: 70, seed: 2 }, { bpm: 70, seed: 3 }]).map((x) => {
+    const f = flick(x.t), tint = [1, 0.8, 0.55];
+    const lit = (z) => ({ r: z.r * (1 + f * tint[0]), g: z.g * (1 + f * tint[1]), b: z.b * (1 + f * tint[2]) });
+    return { ...lit(x), t: x.t, zones: x.zones.map(lit), bg: lit({ r: 200, g: 200, b: 190 }) };
+  });
+  const without = analyze(s), withBg = analyze(s, { background: true });
+  assert.ok(withBg.lightChanging);
+  assert.ok(near(withBg.bpm, 70, 2), `avec fond : ${withBg.bpm}`);
+  assert.ok(!near(without.bpm, 70, 2) || without.snr < withBg.snr, `sans fond : ${without.bpm}`);
+});

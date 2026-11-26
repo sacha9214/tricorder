@@ -400,6 +400,9 @@ export const DEFAULT_MOTION = { domain: 'rgb', quad: false, gate: true };
 // Indices : x, y (fraction de l'image), rotation (proxy), bouche — voir extract.js.
 export const MOTION_GATE = [[0, 0.01], [1, 0.015], [4, 0.03], [6, 0.03]];
 
+// Porte de la correction par le fond : variation relative du vert du fond dans la bande du pouls.
+export const BG_GATE = 0.006;
+
 function detrendedStd(c) {
   const n = c.length, mx = (n - 1) / 2;
   let m = 0;
@@ -427,7 +430,7 @@ export function motionScore(cols) {
 // = plus rapide quand il y a beaucoup de zones, comme la grille du visage).
 // zoneWeights (optionnel) : fonction (SNR au consensus par zone) → poids, pour une pondération
 // qui garde une mémoire d'une fenêtre à l'autre (voir ZoneMemory).
-export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION, fusion = 'snr', topK = 10, nfftZone = NFFT, zoneWeights = null, thresholds = undefined, halfRatio = HALF_RATIO, exclude = null } = {}) {
+export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION, fusion = 'snr', topK = 10, nfftZone = NFFT, zoneWeights = null, thresholds = undefined, halfRatio = HALF_RATIO, exclude = null, background = false } = {}) {
   if (samples.length < 2) return { ready: false, progress: 0 };
   const span = samples[samples.length - 1].t - samples[0].t;
   // Tolérance de 0,1 s (jusqu à deux images partielles aux bords) : à 30 i/s, une fenêtre « de 12 s » fait rarement 12,000 s pile ;
@@ -455,6 +458,25 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
     };
     if (motion.mask) mask = motionSpec ?? motionSpectrum(motionRegressors(cols, { quad: false, band: true, fs }), fs);
   }
+  // Référence de fond (mur à côté de la tête) : ses variations de couleur sont celles de la
+  // lumière ; on les retire des couleurs de la peau avant POS, comme le mouvement.
+  let Xbg = [], lightChanging = false;
+  if (background) {
+    const withBg = samples.filter((s) => s.bg && s.t >= tStart);
+    const total = samples.filter((s) => s.t >= tStart).length;
+    if (withBg.length >= 0.8 * total && withBg.length > 10) {
+      const cols = resampleColumns(withBg, fs, tStart, tEnd, (s) => [s.bg.r, s.bg.g, s.bg.b]);
+      const rel = cols.map((c) => { const m = mean(c); return Float64Array.from(c, (v) => (m > 0 ? v / m - 1 : 0)); });
+      // Porte : on ne corrige que si la lumière du fond varie vraiment dans la bande du pouls
+      // (fond immobile : ~0,27 % ; lampe qui scintille à 2 % : > 0,7 %). Sinon la régression
+      // coûte un peu de signal pour rien.
+      lightChanging = std(bandpass(rel[1], fs)) > BG_GATE;
+      if (lightChanging || background === 'always') Xbg = motionRegressors(rel, { quad: false, band: false, fs });
+    }
+  }
+  if (Xbg.length) {
+    mc = mc ? { ...mc, domain: 'rgb', Xraw: [...(mc.Xraw ?? []), ...Xbg] } : { domain: 'rgb', X: [], Xraw: Xbg };
+  }
   const est = (x) => estimate(x, fs, { mask, kappa: motion?.kappa ?? 4, ratio: halfRatio, exclude });
 
   const green = est(pulseOf(rs, fs, 'green'));
@@ -463,7 +485,7 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
 
   let pulse = method === 'green' ? pulseOf(rs, fs, 'green') : combinedPulse;
   let used = method === 'green' ? 'green' : 'pos';
-  let zones = null, agreement = null;
+  let zones = null, agreement = null, working = 0;
 
   const nz = samples[samples.length - 1].zones?.length ?? 0;
   if (method === 'fusion' && nz > 0) {
@@ -488,10 +510,10 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
         const cols = resampleColumns(list, fs, tStart, tEnd, (x) => x.m);
         // Main, avant-bras, pied : même porte, sur sa propre position (x, y).
         const partMoving = motionScore([cols[0], cols[1]]) > 1;
-        zmc = !partMoving && motion.gate ? null : {
+        zmc = !partMoving && motion.gate ? (Xbg.length ? { domain: 'rgb', X: [], Xraw: Xbg } : null) : {
           domain: motion.domain ?? null,
           X: motionRegressors(cols, { quad: motion.quad, band: true, fs }),
-          Xraw: motion.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs }) : [],
+          Xraw: [...(motion.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs }) : []), ...Xbg],
         };
       }
       const p = pulseOf(resampleRange(list, fs, tStart, tEnd), fs, 'pos', zmc);
@@ -524,6 +546,7 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
       // Un vrai pouls apparaît sur beaucoup de cellules à la fois ; un pic de bruit, sur quelques-unes.
       const present = consensus.filter(Number.isFinite);
       agreement = present.length ? present.filter((c) => c >= 0).length / present.length : 0;
+      working = present.filter((c) => c >= 0).length;
       zones = parts.map((pt, k) =>
         pt ? { bpm: pt.e.bpm, snr: consensus[k], weight: weights[k] / wsum } : null,
       );
@@ -542,7 +565,9 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
     df: fin.df,
     motionCorrected: !!mc,
     moving,
+    lightChanging,
     agreement,
+    working,
     // Part du mouvement de la tête à la fréquence retenue (0 = aucun, 1 = pic du mouvement).
     motionAtPeak: motionSpec ? peakShare(motionSpec, fin.df, fin.f) : 0,
     method: used,

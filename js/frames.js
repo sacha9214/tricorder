@@ -34,6 +34,26 @@ export async function* videoFrames(v, fps = 30) {
   }
 }
 
+// Fond de chaque côté de la tête (mur, décor) : couleur moyenne de deux rectangles placés à
+// ~2 écarts des yeux à gauche et à droite du nez, dans l'image de travail. La lumière qui change
+// (lampe, écran, télé) touche aussi le fond ; le pouls, non. Sert de référence pour retirer de la
+// peau ce qui suit la lumière. null si aucun côté n'est dans l'image.
+export function measureBackground(extractor, face) {
+  const ctx = extractor.ctx, W = extractor.canvas.width, H = extractor.canvas.height;
+  const d = face.scale, w = Math.round(0.8 * d), h = Math.round(1.2 * d);
+  let sr = 0, sg = 0, sb = 0, n = 0;
+  for (const side of [-1, 1]) {
+    const x0 = Math.round(face.nose.x + side * 2.2 * d - w / 2), y0 = Math.round(face.nose.y - 0.3 * d - h / 2);
+    if (x0 < 0 || y0 < 0 || x0 + w > W || y0 + h > H || w < 2 || h < 2) continue;
+    const px = ctx.getImageData(x0, y0, w, h).data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i] > 250 || px[i + 1] > 250 || px[i + 2] > 250) continue;
+      sr += px[i]; sg += px[i + 1]; sb += px[i + 2]; n++;
+    }
+  }
+  return n > 20 ? { r: sr / n, g: sg / n, b: sb / n } : null;
+}
+
 // Mesure d'une image. models : { face, hands?, pose? } (mains et corps seulement s'ils sont
 // fournis). Renvoie { face, regions, m } (m null si pas assez de peau) ou null sans visage.
 export function measureFrame(source, w, h, models, extractor) {
@@ -57,21 +77,40 @@ export function measureFrame(source, w, h, models, extractor) {
     regions = ZONES.map((name, i) => (i < FACE_ZONES ? face.regions[i] : extra[name] ?? null));
   }
   const m = extractor.measure(source, w, h, regions);
-  if (!models.grid) return { face, regions, m };
+  const bg = measureBackground(extractor, face);
+  if (!models.grid) return { face, regions, m, bg };
   // Grille détaillée : les cellules remplacent les 3 zones du visage ; les zones en option
   // (mains, corps) restent à la suite. Les zones du visage servent encore de référence de
   // couleur de peau pour écarter les zones habillées.
   const vals = models.grid.measure(source, w, h, lm);
   const N = models.grid.cells.length;
+  const { cols, rows } = models.grid;
+  // Mise en commun 3×3 : chaque cellule présente prend la moyenne des cellules présentes autour
+  // d'elle. Sur vraies vidéos : ~3 fois plus de cellules portent le pouls, et en mouvement les
+  // lectures fausses passent de 6 % à 2,5 % (tools/offline-score.mjs, configs pool1).
+  const has = (n) => !Number.isNaN(vals[n * 3]);
   const cells = [];
-  for (let n = 0; n < N; n++) cells.push(Number.isNaN(vals[n * 3]) ? null : { r: vals[n * 3], g: vals[n * 3 + 1], b: vals[n * 3 + 2], n: 1 });
+  for (let n = 0; n < N; n++) {
+    if (!has(n)) { cells.push(null); continue; }
+    const r0 = (n / cols) | 0, c0 = n % cols;
+    let sr = 0, sg = 0, sb = 0, k = 0;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const r = r0 + dr, c = c0 + dc;
+      if (r < 0 || c < 0 || r >= rows || c >= cols) continue;
+      const m = r * cols + c;
+      if (!has(m)) continue;
+      sr += vals[m * 3]; sg += vals[m * 3 + 1]; sb += vals[m * 3 + 2]; k++;
+    }
+    cells.push({ r: sr / k, g: sg / k, b: sb / k, n: k });
+  }
   const ok = cells.filter(Boolean);
-  if (!ok.length) return { face, regions: models.grid.cellRegions(ww / w), m: null };
+  if (!ok.length) return { face, regions: models.grid.cellRegions(ww / w), m: null, bg };
   const avg = (c) => ok.reduce((a, z) => a + z[c], 0) / ok.length;
   const zones = [...cells, ...(m?.zones.slice(FACE_ZONES) ?? regions.slice(FACE_ZONES).map(() => null))];
   const cellRegs = models.grid.cellRegions(ww / w);
   return {
     face,
+    bg,
     regions: [...cellRegs, ...regions.slice(FACE_ZONES)],
     m: { r: avg('r'), g: avg('g'), b: avg('b'), zones, faceZones: m?.zones.slice(0, FACE_ZONES) ?? null, raw: m?.raw ?? { r: avg('r'), g: avg('g'), b: avg('b') }, pixels: ok.length, kept: 1, clipped: m?.clipped ?? 0 },
   };

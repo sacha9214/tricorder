@@ -203,3 +203,7 @@ a.btn { text-decoration: none; }
 .extras .row { display: flex; align-items: center; gap: 10px; }
 .extras input { accent-color: var(--pulse); }
 .extras .hint { margin: 2px 0 0; }
+
+/* Respiration */
+.bpm-line.small .bpm { font-size: 40px; }
+.card.breath .hint { margin-top: 6px; }

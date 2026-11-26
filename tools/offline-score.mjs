@@ -40,6 +40,26 @@ export const CONFIGS = {
   // Configuration retenue pour la page : grille, mémoire 0,1, seuil 2 dB ; avec suivi pour comparer.
   final: { kind: 'grid', fusion: 'snr', memory: 0.1, thr: 2.0 },
   final_zones3: { kind: 'zones', off: 9, thr: 3.5 },
+  pool1: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0 },
+  pool2: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 2, thr: 2.0 },
+  // Conditions difficiles (mêmes vraies vidéos, dégradées) :
+  final_dim: { kind: 'grid', fusion: 'snr', memory: 0.1, thr: 2.0, degrade: { dark: 0.4, noise: 0.6 } },
+  pool1_dim: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, degrade: { dark: 0.4, noise: 0.6 } },
+  final_noisy: { kind: 'grid', fusion: 'snr', memory: 0.1, thr: 2.0, degrade: { noise: 1.2 } },
+  pool1_noisy: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, degrade: { noise: 1.2 } },
+  final_flicker: { kind: 'grid', fusion: 'snr', memory: 0.1, thr: 2.0, degrade: { flicker: 0.02, flickerHz: 1.3 } },
+  pool1_flicker: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, degrade: { flicker: 0.02, flickerHz: 1.3 } },
+  zones3_dim: { kind: 'zones', off: 9, thr: 3.5, degrade: { dark: 0.4, noise: 0.6 } },
+  // Référence de fond (vidéos bg_*, ré-extraites avec le mur à côté de la tête).
+  pool1_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true },
+  pool1_bg_always: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: 'always' },
+  pool1_flicker_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, degrade: { flicker: 0.02, flickerHz: 1.3 } },
+  pool1_dim_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, degrade: { dark: 0.4, noise: 0.6 } },
+  pool1_flicker2: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, degrade: { flicker: 0.02, flickerHz: 2.1 } },
+  pool1_flicker2_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, degrade: { flicker: 0.02, flickerHz: 2.1 } },
+  // Mouvement : correction avec carrés (porte active), sur la grille mise en commun.
+  pool1_quad: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, motion: { domain: 'rgb', quad: true, gate: true } },
+  pool1_quad_speed: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, motion: { domain: 'rgb', quad: true, deriv: true, gate: true } },
   mean_w12: { kind: 'grid_mean' },
   mean_w20: { kind: 'grid_mean', window: 20 },
   equal_w12: { kind: 'grid', fusion: 'equal' },
@@ -52,10 +72,35 @@ export const CONFIGS = {
   grid_mem_w16: { kind: 'grid', fusion: 'snr', memory: 0.2, window: 16 },
 };
 
+// Conditions dégradées, appliquées aux couleurs des cellules (vraies vidéos, mêmes personnes) :
+//  - dark : image k fois plus sombre (gain réduit, couleurs ×k) ;
+//  - noise : bruit capteur ajouté par cellule et par image (niveaux 0–255), comme une webcam
+//    bon marché poussée en faible lumière ;
+//  - flicker : lampe qui scintille, variation commune d'éclairage (amplitude relative) à une
+//    fréquence dans la bande du pouls, légèrement colorée (lumière chaude).
+function degrader(spec, seed = 1) {
+  if (!spec) return null;
+  let st = seed >>> 0;
+  const rand = () => { st = (st + 0x6d2b79f5) >>> 0; let t = st; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const gauss = () => Math.sqrt(-2 * Math.log(Math.max(rand(), 1e-12))) * Math.cos(2 * Math.PI * rand());
+  return (t, z, flickerScale = 1) => {
+    if (!z) return z;
+    const k = spec.dark ?? 1;
+    const fl = spec.flicker ? flickerScale * spec.flicker * Math.sin(2 * Math.PI * (spec.flickerHz ?? 1.3) * t) : 0;
+    const tint = [1, 0.8, 0.55];
+    const ch = (v, c) => {
+      const x = v * k * (1 + fl * tint[c]) + (spec.noise ?? 0) * gauss();
+      return Math.round(Math.min(255, Math.max(0, x)) * 8) / 8; // quantification approximative
+    };
+    return { r: ch(z.r, 0), g: ch(z.g, 1), b: ch(z.b, 2) };
+  };
+}
+
 export function buildSamples(h, data, cfg) {
   const { rowLen, frames, cells } = h;
   const N = cells.length;
   const out = [];
+  const deg = degrader(cfg.degrade);
   const regionIdx = cells.map(REGION_OF);
   for (let f = 0; f < frames; f++) {
     const o = f * rowLen;
@@ -66,15 +111,33 @@ export function buildSamples(h, data, cfg) {
     if (cfg.kind === 'zones') {
       zones = [0, 1, 2].map((z) => {
         const k = o + cfg.off + z * 3;
-        return Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] };
+        const v = Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] };
+        return deg ? deg(t, v) : v;
       });
     } else {
       const cellVals = [];
       for (let n = 0; n < N; n++) {
         const k = o + 27 + n * 3;
-        cellVals.push(Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] });
+        const v = Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] };
+        cellVals.push(deg ? deg(t, v) : v);
       }
-      if (cfg.kind === 'grid') zones = cellVals;
+      if (cfg.kind === 'grid' && cfg.pool) {
+        // Mise en commun avec les voisines : chaque cellule présente prend la moyenne des cellules
+        // présentes dans un carré (2·pool+1)² autour d'elle.
+        const { cols, rows } = h;
+        zones = cellVals.map((z, n) => {
+          if (!z) return null;
+          const r0 = (n / cols) | 0, c0 = n % cols;
+          let sr = 0, sg = 0, sb = 0, k = 0;
+          for (let dr = -cfg.pool; dr <= cfg.pool; dr++) for (let dc = -cfg.pool; dc <= cfg.pool; dc++) {
+            const r = r0 + dr, c = c0 + dc;
+            if (r < 0 || c < 0 || r >= rows || c >= cols) continue;
+            const v = cellVals[r * cols + c];
+            if (v) { sr += v.r; sg += v.g; sb += v.b; k++; }
+          }
+          return { r: sr / k, g: sg / k, b: sb / k };
+        });
+      } else if (cfg.kind === 'grid') zones = cellVals;
       else {
         const groups = cfg.kind === 'grid_mean' ? [cellVals] : [0, 1, 2, 3, 4].map((g) => cellVals.filter((_, n) => regionIdx[n] === g));
         zones = groups.map((list) => {
@@ -88,7 +151,13 @@ export function buildSamples(h, data, cfg) {
     const ok = zones.filter(Boolean);
     if (!ok.length) continue;
     const avg = (c) => ok.reduce((a, z) => a + z[c], 0) / ok.length;
-    out.push({ t, r: avg('r'), g: avg('g'), b: avg('b'), zones, motion });
+    let bg = null;
+    if (h.bgOffset !== undefined && !Number.isNaN(data[o + h.bgOffset])) {
+      bg = { r: data[o + h.bgOffset], g: data[o + h.bgOffset + 1], b: data[o + h.bgOffset + 2] };
+      // Le fond reçoit la même lumière (scintillement compris), un peu atténuée par la géométrie.
+      if (deg) bg = deg(t, bg, 0.8);
+    }
+    out.push({ t, r: avg('r'), g: avg('g'), b: avg('b'), zones, motion, ...(bg ? { bg } : {}) });
   }
   return out;
 }
@@ -141,6 +210,8 @@ async function scoreVideo(name, configNames) {
     if (cfg.memory) opts.zoneWeights = new ZoneMemory({ alpha: cfg.memory }).weigh;
     if (cfg.window) { opts.window = cfg.window; opts.minWindow = cfg.window; }
     if (cfg.halfRatio !== undefined) opts.halfRatio = cfg.halfRatio;
+    if (cfg.motion) opts.motion = cfg.motion;
+    if (cfg.background) opts.background = cfg.background;
     // Jeu TU/e : artefact de compression du caméscope à 30/12 = 2,5 Hz (images clés), mesuré à
     // 2,4993 ± 0,007 Hz sur P3. Retiré pour ce jeu seulement ; une webcam en direct n'en a pas.
     if (name.startsWith('tue_') && process.env.NOTCH !== '0') opts.exclude = [[2.45, 2.55]];
@@ -158,7 +229,7 @@ async function scoreVideo(name, configNames) {
       if (e <= 3) raw3++;
       if (r.quality !== 'poor') { shown++; abs += e; if (e > 5) wrong++; }
       if (tv !== null) { shownT++; const et = Math.abs(tv - w.bpm); absT += et; if (et > 5) wrongT++; }
-      recs.push([+r.t.toFixed(1), +r.snr.toFixed(2), +(r.bpm - w.bpm).toFixed(2), r.agreement === null ? 1 : +r.agreement.toFixed(3)]);
+      recs.push([+r.t.toFixed(1), +r.snr.toFixed(2), +(r.bpm - w.bpm).toFixed(2), r.agreement === null ? 1 : +r.agreement.toFixed(3), r.working ?? 0]);
     }
     res[cn] = { n, raw3: raw3 / n, shown: shown / n, mae: abs / shown, wrong, shownT: shownT / n, maeT: absT / shownT, wrongT, recs };
   }
@@ -168,7 +239,7 @@ async function scoreVideo(name, configNames) {
 if (isMainThread && process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const configNames = (process.argv[2] ?? Object.keys(CONFIGS).join(',')).split(',');
   const filter = new RegExp(process.argv[3] ?? '.');
-  const names = readdirSync(OUT).filter((f) => f.endsWith('.json') && /^(mcd|tue)_/.test(f)).map((f) => f.slice(0, -5)).filter((n) => filter.test(n)).sort();
+  const names = readdirSync(OUT).filter((f) => f.endsWith('.json') && /^(bg_)?(mcd|tue)_/.test(f)).map((f) => f.slice(0, -5)).filter((n) => filter.test(n)).sort();
   const queue = [...names], results = [];
   const nWorkers = Math.max(1, Math.min(cpus().length - 1, names.length));
   await Promise.all(Array.from({ length: nWorkers }, () => new Promise((resolve) => {

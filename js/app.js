@@ -7,6 +7,7 @@ import { Magnifier } from './magnify.js';
 import { Recorder, recordingName, download, MAX_SECONDS } from './recorder.js';
 import { loadLandmarker, loadHands, loadPose, faceLandmarkerClass } from './landmarker.js';
 import { FaceGrid, featureSets } from './grid.js';
+import { estimateBreathing } from './breath.js';
 import { videoFrames, measureFrame } from './frames.js';
 import { t, setLang, getLang, applyI18n } from './i18n.js';
 
@@ -29,6 +30,7 @@ const els = {
   magnify: $('magnify'), gainRow: $('gainRow'), gain: $('gain'), gainOut: $('gainOut'), magnifyHint: $('magnifyHint'),
   btnRecord: $('btnRecord'), recLabel: $('recLabel'),
   savePanel: $('savePanel'), saveTitle: $('saveTitle'), refBpm: $('refBpm'), btnSave: $('btnSave'), btnDiscard: $('btnDiscard'),
+  breathRate: $('breathRate'), breathWave: $('breathWave'),
   bpm: $('bpm'), quality: $('quality'), qualityLabel: $('qualityLabel'), snr: $('snr'),
   progress: $('progress'), progressBar: $('progressBar'), truth: $('truth'),
   wave: $('wave'), spectrum: $('spectrum'), details: $('details'),
@@ -41,6 +43,7 @@ const recorder = new Recorder();
 const state = {
   mode: 'idle', run: 0,
   samples: [], lastT: null, noFaceSince: null,
+  breath: [], breathResult: null,
   result: null, tracker: new HrTracker(), zoneMemory: new ZoneMemory({ alpha: 0.1 }), motion: [], frameTimes: [], pixels: 0, kept: 0,
   stream: null, fileUrl: null, demo: null, demoTimer: null, analyzeTimer: null,
   landmarker: null, truth: null,
@@ -60,15 +63,18 @@ function setStatus(key, vars = {}, error = false) {
 // ---------- Tampon d'échantillons ----------
 function resetBuffer() {
   state.samples = []; state.lastT = null; state.result = null;
-  state.tracker.reset(); state.zoneMemory.reset(); state.motion = [];
+  state.tracker.reset(); state.zoneMemory.reset(); state.motion = []; state.breath = []; state.breathResult = null;
 }
 
-function pushSample(time, m, motion = null) {
+function pushSample(time, m, motion = null, bg = null) {
   if (state.lastT !== null) {
     if (Math.abs(time - state.lastT) < 1e-6) return; // même image
     if (time < state.lastT || time - state.lastT > GAP_RESET_S) resetBuffer();
   }
-  state.samples.push({ t: time, r: m.r, g: m.g, b: m.b, zones: m.zones, ...(motion ? { motion } : {}) });
+  state.samples.push({ t: time, r: m.r, g: m.g, b: m.b, zones: m.zones, ...(motion ? { motion } : {}), ...(bg ? { bg } : {}) });
+  // Respiration : historique plus long (40 s), sans les zones.
+  state.breath.push({ t: time, r: m.r, g: m.g, b: m.b, ...(motion ? { motion } : {}) });
+  while (state.breath.length && state.breath[0].t < time - 40) state.breath.shift();
   state.lastT = time;
   state.pixels = m.pixels;
   state.kept = m.kept;
@@ -128,7 +134,7 @@ function processFrame(time, source, w, h, fixed = null) {
   state.frameTimes.push(time);
   while (state.frameTimes.length && state.frameTimes[0] < time - 2) state.frameTimes.shift();
 
-  let regions = [], hull = null, m = null, motion = null;
+  let regions = [], hull = null, m = null, motion = null, bg = null;
   if (fixed) {
     regions = fixed.regions;
     hull = fixed.hull;
@@ -138,6 +144,7 @@ function processFrame(time, source, w, h, fixed = null) {
     if (res) {
       regions = res.regions;
       motion = res.face.motion;
+      bg = res.bg;
       const k = w / WORK_W;
       hull = res.face.hull.map((p) => ({ x: p.x * k, y: p.y * k }));
       m = res.m;
@@ -148,7 +155,7 @@ function processFrame(time, source, w, h, fixed = null) {
       if (time - state.noFaceSince > GAP_RESET_S) resetBuffer();
     }
   }
-  if (m && !readingsPaused()) pushSample(time, m, motion);
+  if (m && !readingsPaused()) pushSample(time, m, motion, bg);
   if (state.magnify) {
     const bpm = state.tracker.bpm;
     magnifier.setBand(bpm ? bpm / 60 : null, frameRate());
@@ -392,10 +399,11 @@ function runAnalysis() {
     setButtons();
   }
   const r = analyze(state.samples, USE_GRID
-    ? { nfftZone: 1024, zoneWeights: state.zoneMemory.weigh, thresholds: GRID_THRESHOLDS }
+    ? { nfftZone: 1024, zoneWeights: state.zoneMemory.weigh, thresholds: GRID_THRESHOLDS, background: true }
     : {});
   state.result = r;
   if (r.ready) state.tracker.update(r);
+  state.breathResult = estimateBreathing(state.breath);
   updateStatusFromResult(r);
   render();
 }
@@ -411,6 +419,7 @@ function updateStatusFromResult(r) {
   }
   if (state.mode === 'demo') return setStatus('status.demo');
   if (r.quality !== 'poor' && r.moving) return setStatus('status.movingOk');
+  if (r.quality !== 'poor' && r.lightChanging) return setStatus('status.lightOk');
   setStatus(r.quality === 'poor' ? 'status.weak' : 'status.ok');
 }
 
@@ -438,25 +447,23 @@ function drawOverlay(regions, vw, vh, k) {
   });
 }
 
-// Grille : chaque cellule teintée selon la qualité de son signal, d'autant plus opaque que
-// son poids dans la mesure est grand — une carte de l'endroit où le pouls se voit le mieux.
+// Grille : chaque cellule où le pouls ressort (SNR ≥ 0 dB à la fréquence retenue) est teintée
+// en vert, d'autant plus intense que son signal est net ; les autres restent un simple contour.
+// Une carte de l'endroit où le pouls se voit sur le visage.
 function drawHeatMap(regions, k, r) {
-  let wmax = 0;
-  if (r?.ready && r.zones) for (const zn of r.zones) if (zn) wmax = Math.max(wmax, zn.weight);
   octx.setLineDash([]);
   regions.forEach((reg, z) => {
     if (!reg) return;
     const zn = r?.ready ? r.zones?.[z] : null;
     tracePath(octx, reg, k);
-    if (!zn || !wmax) {
-      octx.strokeStyle = 'rgba(228,232,236,0.25)';
+    if (!zn || !(zn.snr >= 0)) {
+      octx.strokeStyle = 'rgba(228,232,236,0.22)';
       octx.lineWidth = 1;
       octx.stroke();
       return;
     }
-    const q = zn.snr >= 2 ? 'good' : zn.snr >= 1 ? 'fair' : 'poor';
-    octx.globalAlpha = 0.22 + 0.5 * Math.sqrt(zn.weight / wmax);
-    octx.fillStyle = QUALITY_COLORS[q];
+    octx.globalAlpha = Math.min(0.8, 0.25 + 0.12 * zn.snr);
+    octx.fillStyle = QUALITY_COLORS.good;
     octx.fill();
     octx.globalAlpha = 1;
   });
@@ -548,9 +555,8 @@ function render() {
     ];
     if (r.zones && r.zones.length > 20 && state.grid) {
       const N = state.grid.cells.length;
-      const cellW = r.zones.slice(0, N).filter(Boolean).map((zn) => zn.weight).sort((a, b) => b - a);
-      const top5 = cellW.slice(0, 5).reduce((a, b) => a + b, 0) / (cellW.reduce((a, b) => a + b, 0) || 1);
-      parts.push(t('details.grid', { n: cellW.length, p: Math.round(top5 * 100) }));
+      const cells = r.zones.slice(0, N).filter(Boolean);
+      parts.push(t('details.grid', { n: cells.length, w: cells.filter((zn) => zn.snr >= 0).length }));
       const extra = r.zones.slice(N).map((zn, j) => (zn ? `${t(`zone.${ZONES[3 + j]}`)} ${zn.snr.toFixed(1)} dB` : null)).filter(Boolean);
       if (extra.length) parts.push(extra.join(', '));
     } else if (r.zones) {
@@ -567,6 +573,29 @@ function render() {
 
   drawWave(r);
   drawSpectrum(r);
+  drawBreath(state.breathResult);
+}
+
+// Respiration : onde (10 Hz, 32 s) et rythme seulement si le pic est net.
+const BREATH_CLARITY = 0.45;
+function drawBreath(b) {
+  const clear = b?.ready && b.clarity >= BREATH_CLARITY;
+  els.breathRate.textContent = clear ? Math.round(b.rate) : '—';
+  const { ctx, w, h } = fitCanvas(els.breathWave);
+  ctx.strokeStyle = '#1e252d'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+  if (!b?.ready || !b.wave) return;
+  const x = b.wave, n = x.length;
+  let max = 1e-12;
+  for (const v of x) max = Math.max(max, Math.abs(v));
+  ctx.strokeStyle = clear ? '#7aa2ff' : '#6c7784';
+  ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const px = (i / (n - 1)) * w, py = h / 2 - (x[i] / max) * (h / 2 - 6);
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.stroke();
 }
 
 // ---------- Langue ----------
