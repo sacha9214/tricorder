@@ -52,6 +52,9 @@ export const CONFIGS = {
   zones3_dim: { kind: 'zones', off: 9, thr: 3.5, degrade: { dark: 0.4, noise: 0.6 } },
   // Référence de fond (vidéos bg_*, ré-extraites avec le mur à côté de la tête).
   pool1_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true },
+  // Angles 3D de la tête (fichiers ang_*) : correction du mouvement avec 7 signaux ou 10.
+  pool1_bg_m7: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, motionDims: 7 },
+  pool1_bg_m10: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, motionDims: 10 },
   pool1_bg_always: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: 'always' },
   pool1_flicker_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, degrade: { flicker: 0.02, flickerHz: 1.3 } },
   pool1_dim_bg: { kind: 'grid', fusion: 'snr', memory: 0.1, pool: 1, thr: 2.0, background: true, degrade: { dark: 0.4, noise: 0.6 } },
@@ -101,23 +104,26 @@ export function buildSamples(h, data, cfg) {
   const N = cells.length;
   const out = [];
   const deg = degrader(cfg.degrade);
+  // Disposition des lignes (anciens fichiers : 7 signaux de mouvement, cellules à 27).
+  const ML = h.motionLen ?? 7, CO = h.cellsOffset ?? 27, Z1 = h.zonesOffset ?? 9, Z2 = h.rawOffset ?? 18;
+  const motionDims = cfg.motionDims ?? ML;
   const regionIdx = cells.map(REGION_OF);
   for (let f = 0; f < frames; f++) {
     const o = f * rowLen;
     if (data[o + 1] !== 1) continue;
     const t = data[o];
-    const motion = Array.from(data.subarray(o + 2, o + 9));
+    const motion = Array.from(data.subarray(o + 2, o + 2 + Math.min(ML, motionDims)));
     let zones;
     if (cfg.kind === 'zones') {
       zones = [0, 1, 2].map((z) => {
-        const k = o + cfg.off + z * 3;
+        const k = o + (cfg.off === 18 ? Z2 : Z1) + z * 3;
         const v = Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] };
         return deg ? deg(t, v) : v;
       });
     } else {
       const cellVals = [];
       for (let n = 0; n < N; n++) {
-        const k = o + 27 + n * 3;
+        const k = o + CO + n * 3;
         const v = Number.isNaN(data[k]) ? null : { r: data[k], g: data[k + 1], b: data[k + 2] };
         cellVals.push(deg ? deg(t, v) : v);
       }
@@ -183,7 +189,7 @@ function meanSkin(h, data) {
     const o = f * h.rowLen;
     if (data[o + 1] !== 1) continue;
     for (let c = 0; c < h.cells.length; c++) {
-      const k = o + 27 + c * 3;
+      const k = o + (h.cellsOffset ?? 27) + c * 3;
       if (Number.isNaN(data[k])) continue;
       acc[0] += data[k]; acc[1] += data[k + 1]; acc[2] += data[k + 2]; n++;
     }
@@ -214,7 +220,7 @@ async function scoreVideo(name, configNames) {
     if (cfg.background) opts.background = cfg.background;
     // Jeu TU/e : artefact de compression du caméscope à 30/12 = 2,5 Hz (images clés), mesuré à
     // 2,4993 ± 0,007 Hz sur P3. Retiré pour ce jeu seulement ; une webcam en direct n'en a pas.
-    if (name.startsWith('tue_') && process.env.NOTCH !== '0') opts.exclude = [[2.45, 2.55]];
+    if (name.includes('tue_') && process.env.NOTCH !== '0') opts.exclude = [[2.45, 2.55]];
     const windows = samples.length > 300 ? slidingAnalysis(samples, opts) : [];
     const tracker = new HrTracker();
     const recs = [];
@@ -239,7 +245,7 @@ async function scoreVideo(name, configNames) {
 if (isMainThread && process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const configNames = (process.argv[2] ?? Object.keys(CONFIGS).join(',')).split(',');
   const filter = new RegExp(process.argv[3] ?? '.');
-  const names = readdirSync(OUT).filter((f) => f.endsWith('.json') && /^(bg_)?(mcd|tue)_/.test(f)).map((f) => f.slice(0, -5)).filter((n) => filter.test(n)).sort();
+  const names = readdirSync(OUT).filter((f) => f.endsWith('.json') && /^(bg_|ang_)?(mcd|tue)_/.test(f)).map((f) => f.slice(0, -5)).filter((n) => filter.test(n)).sort();
   const queue = [...names], results = [];
   const nWorkers = Math.max(1, Math.min(cpus().length - 1, names.length));
   await Promise.all(Array.from({ length: nWorkers }, () => new Promise((resolve) => {

@@ -60,8 +60,20 @@ export function measureFrame(source, w, h, models, extractor) {
   const res = models.face.detectForVideo(source, nextTs());
   const lm = res.faceLandmarks?.[0];
   if (!lm) return null;
+  return measureFace(source, w, h, lm, res.facialTransformationMatrixes?.[0] ?? null, models, extractor);
+}
+
+// Tous les visages d'une image (mode duel), triés de gauche à droite dans l'image.
+export function detectFaces(source, model) {
+  const res = model.detectForVideo(source, nextTs());
+  const faces = (res.faceLandmarks ?? []).map((lm, i) => ({ lm, matrix: res.facialTransformationMatrixes?.[i] ?? null }));
+  return faces.sort((a, b) => a.lm[1].x - b.lm[1].x);
+}
+
+// Mesure d'un visage déjà détecté (repères lm, matrice 3D optionnelle).
+export function measureFace(source, w, h, lm, matrix, models, extractor) {
   const { w: ww, h: wh } = extractor.size(w, h);
-  const face = faceRegions(lm, ww, wh);
+  const face = faceRegions(lm, ww, wh, matrix);
   let regions = face.regions;
   if (models.hands || models.pose) {
     const extra = {};

@@ -207,3 +207,14 @@ a.btn { text-decoration: none; }
 /* Respiration */
 .bpm-line.small .bpm { font-size: 40px; }
 .card.breath .hint { margin-top: 6px; }
+
+/* Vérification, duel */
+.card.check { margin-top: 14px; display: grid; gap: 8px; }
+.card.check .controls { margin-top: 0; }
+.btn.tap { font-size: 18px; padding: 16px 28px; border-color: var(--pulse); }
+.btn.tap:active { background: rgba(255, 95, 109, 0.2); }
+.check-result { margin: 0; font: 600 16px/1.4 var(--mono); }
+.duel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.duel-row > div { display: grid; gap: 2px; }
+.duel-name { color: var(--muted); font-size: 13px; }
+.duel-row .bpm { font-size: 48px; }

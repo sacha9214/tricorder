@@ -6,6 +6,9 @@
   <title>Tricorder</title>
   <meta name="description" content="Heart rate from your webcam, computed entirely in your browser (rPPG, POS algorithm).">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M2 17h7l3-8 5 16 4-12 2 4h7' fill='none' stroke='%23ff5f6d' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0a0c0f">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -42,6 +45,7 @@
         <button type="button" class="btn primary" id="btnCamera" data-i18n="src.camera"></button>
         <button type="button" class="btn" id="btnFile" data-i18n="src.file"></button>
         <input type="file" id="fileInput" accept="video/*" hidden>
+        <button type="button" class="btn" id="btnFinger" data-i18n="src.finger"></button>
         <button type="button" class="btn" id="btnDemo" data-i18n="src.demo"></button>
         <button type="button" class="btn ghost" id="btnStop" data-i18n="src.stop" disabled></button>
       </div>
@@ -57,11 +61,37 @@
           <input type="range" id="gain" aria-labelledby="gainLabel" min="10" max="150" step="5" value="50">
           <output id="gainOut">×50</output>
         </label>
+        <label class="switch">
+          <input type="checkbox" id="optDuel">
+          <span class="track" aria-hidden="true"></span>
+          <span data-i18n="duel.label"></span>
+        </label>
         <button type="button" class="btn rec" id="btnRecord" disabled>
           <span class="rec-dot" aria-hidden="true"></span><span id="recLabel" data-i18n="rec.start"></span>
         </button>
       </div>
       <p class="hint" id="magnifyHint" hidden data-i18n="magnify.hint"></p>
+      <p class="hint" id="fingerHint" hidden data-i18n="finger.hint"></p>
+
+      <div class="card check" id="checkCard">
+        <h2 data-i18n="check.title"></h2>
+        <p class="hint" data-i18n="check.intro"></p>
+        <div class="controls">
+          <button type="button" class="btn primary" id="btnCheck" data-i18n="check.start"></button>
+          <button type="button" class="btn tap" id="btnTap" hidden data-i18n="check.tap"></button>
+          <button type="button" class="btn ghost" id="btnCheckDone" hidden data-i18n="check.done"></button>
+        </div>
+        <p class="mono" id="checkLive" hidden></p>
+        <p class="check-result" id="checkResult" hidden></p>
+        <div class="controls" id="checkSaveRow" hidden>
+          <button type="button" class="btn" id="btnCheckSave" data-i18n="check.save"></button>
+        </div>
+        <p class="hint" id="checkSummary"></p>
+        <div class="controls">
+          <button type="button" class="btn ghost" id="btnCheckExport" data-i18n="check.export"></button>
+          <button type="button" class="btn ghost" id="btnCheckClear" data-i18n="check.clear"></button>
+        </div>
+      </div>
 
       <fieldset class="extras">
         <legend data-i18n="extras.title"></legend>
@@ -122,6 +152,15 @@
         <canvas class="plot" id="wave"></canvas>
       </div>
 
+      <div class="card duel" id="duelCard" hidden>
+        <h2 data-i18n="duel.title"></h2>
+        <div class="duel-row">
+          <div><span class="duel-name" data-i18n="duel.left"></span><span class="bpm" id="duelLeft">—</span></div>
+          <div><span class="duel-name" data-i18n="duel.right"></span><span class="bpm" id="duelRight">—</span></div>
+        </div>
+        <p class="hint" id="duelDiff"></p>
+      </div>
+
       <div class="card breath">
         <h2 data-i18n="breath.title"></h2>
         <div class="bpm-line small">
@@ -135,6 +174,13 @@
       <div class="card">
         <h2 data-i18n="spec.title"></h2>
         <canvas class="plot" id="spectrum"></canvas>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="history.title"></h2>
+        <canvas class="plot" id="history"></canvas>
+        <p class="mono" id="historyStats">—</p>
+        <div class="controls"><button type="button" class="btn ghost" id="btnHistoryExport" data-i18n="history.export"></button></div>
       </div>
 
       <details class="card details">

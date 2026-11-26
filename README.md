@@ -8,6 +8,22 @@ Sit still in good light for about 10 seconds. The face turns into a heat map of 
 
 > Experimental and educational. Not a medical device: don't use it to diagnose or monitor a health condition.
 
+## Features
+
+| Feature | What it does | Tested how |
+|---|---|---|
+| **Face heat map** | ~40 small skin cells, each tinted by how clearly it carries the pulse | 40 + 3 people (below) |
+| **Check it yourself** | Press **Check**, feel your pulse at the wrist or neck, tap (or press Space) on each beat for ~15 s. The page compares your count with its reading. Checks are kept on your device and can be exported as CSV. | Unit tests on the tap counter |
+| **Finger mode** | On a phone: cover the back camera and flash with a fingertip. The torch turns on and the whole image pulses, like a pulse oximeter. Much stronger than the face signal, so it works as a reference. | Unit tests on synthetic signals. **Not yet tried on a real phone.** |
+| **Exposure lock** | After 2.5 s the camera's auto-exposure and white balance are frozen, because their constant adjustments look like brightness changes. If the face is dark, exposure is raised a step. | Chrome only, depends on the camera. **Not yet tried on real hardware.** |
+| **Session history** | The heart rate over the whole session as a chart, with min / median / max, exportable as CSV | In the browser on recorded video |
+| **Duel** | Two faces side by side, each with its own rate and both curves on one chart. A game, not a lie detector. | Two MCD people composited side by side: 73.2 / 73.3 and 69.5 / 70.0 bpm, each matching that person alone |
+| **Pulse delay** (experimental) | With hands on, the delay between the pulse in the face and in the palm. At 30 frames/s one frame is 33 ms, so this is rough. **Not blood pressure.** | Unit tests on synthetic waves. Not validated on people. |
+| **Breathing** (experimental) | A breathing wave from small head movements and skin color | Could not be validated (below) |
+| **Works offline** | Installable app. The face, hand and body models (~35 MB) are bundled and cached after the first visit, so it runs without a connection. | Page, face model and demo load with the server stopped |
+
+Also tested and **not used**: true 3D head angles from the face tracker as extra motion signals. They didn't improve readings on moving people (78 % vs 77 % within 3 bpm), so the simpler 2D motion signals stay.
+
 ## How it works
 
 Each heartbeat pushes a little more blood into the skin, which then absorbs slightly more green light. The change is 0.1–1 % of pixel brightness, invisible to the eye but measurable when you average many skin pixels. This is remote photoplethysmography (rPPG).
@@ -52,6 +68,8 @@ With the page's settings, the grid shows a reading in 48 % of windows (0.9 % wro
 | **Dark skin** | **9 %** | **1 %** | 7 of 8 |
 
 **This method does not work reliably on darker skin.** It's one person per skin tone, so read this as a warning, not a statistic. The pulse signal is much weaker (melanin absorbs more light), the lighting was often dim, and the camcorder's compression adds noise. The tool mostly hides readings rather than showing wrong ones, but on the dark-skinned participant the few it showed were wrong. This is a known, documented limit of camera-based pulse measurement. Fixing it needs data from many more people with darker skin, and the datasets that have them require institutional agreements.
+
+Two things in the page help a little: the exposure boost when the face is dark, and the **Check** feature. If you have darker skin and want to help, do a few checks in different light and send the exported CSV (it has only times and heart rates, no video). That is the data this project lacks.
 
 **Movement** is still hard. Correction raises correct estimates (38 % → 50 % on the raw signal), but the confidence score is less trustworthy while the head moves, so those readings are shown greyed.
 
@@ -99,8 +117,9 @@ Every one of these was measured, not guessed. Scripts are in `tools/`.
 
 ## Simulated tests
 
-Simulation was useful to build and unit-test each piece, but several conclusions did not survive real data (see above). `npm test` runs 33 tests:
+Simulation was useful to build and unit-test each piece, but several conclusions did not survive real data (see above). `npm test` runs 37 tests:
 - rates 45–175 bpm;
+- tap counting, finger mode, pulse delay and 3D head angles;
 - timestamp jitter, light flicker, auto-exposure jumps and glare;
 - zone fusion, skin filter, tracking and cell memory;
 - motion correction (including a hand moving on its own) and the background-light correction;
@@ -142,7 +161,11 @@ Then open http://localhost:8766. The camera needs `localhost` or HTTPS.
 | `js/grid.js` | detailed face grid (straightened face, skin cells) |
 | `js/breath.js` | breathing wave and rate (experimental) |
 | `js/extract.js`, `js/skin.js` | zones from landmarks (face, hands, body), skin pixel selection, head motion signals |
-| `js/landmarker.js`, `js/frames.js` | MediaPipe models (CDN), frame-by-frame video reading |
+| `js/landmarker.js`, `js/frames.js` | MediaPipe models (bundled in `vendor/`, CDN fallback), one or two faces, frame-by-frame video reading |
+| `js/person.js` | per-person state (signal, tracker, cell memory, history), used once or twice in a duel |
+| `js/finger.js`, `js/camera.js` | finger mode; torch, exposure lock and boost |
+| `js/check.js`, `js/history.js`, `js/delay.js` | tap-to-check, session history and CSV, face-to-palm pulse delay |
+| `sw.js`, `manifest.webmanifest` | offline cache and installable app |
 | `js/magnify.js` | pulse magnification |
 | `js/recorder.js`, `js/bench.js` | recording and accuracy bench |
 | `js/synth.js`, `js/demo.js` | synthetic signals, moving head in colored light, demo face |
@@ -152,8 +175,10 @@ Then open http://localhost:8766. The camera needs `localhost` or HTTPS.
 - **Darker skin:** see above, not reliable.
 - **Movement:** readings are approximate.
 - **Dim or flickering light:** fewer readings.
+- **Finger mode, exposure lock, torch:** they depend on the phone or webcam and haven't been tried on real hardware yet.
+- **Pulse delay and breathing:** experimental, not validated.
 - **Validation scope:** 40 people at rest and after exercise, plus 3 people on a second dataset. Not a clinical validation.
 
 ## License
 
-MIT for the code. The datasets keep their own licenses and are not included.
+MIT for the code. `vendor/` holds MediaPipe Tasks Vision 0.10.14 and its models, under Apache-2.0 (see `vendor/README.md`). The datasets keep their own licenses and are not included.

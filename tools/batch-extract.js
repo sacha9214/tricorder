@@ -21,33 +21,36 @@ export async function processVideo(item) {
   const ex = new Extractor();
   const v = Object.assign(document.createElement('video'), { muted: true, playsInline: true, src: '/' + item.mp4 });
   const N = grid.cells.length;
-  const rowLen = 2 + 7 + 9 + 9 + 3 * N + 3; // + fond (r, g, b)
+  // [t, visage, mouvement ×10 (7 + angles 3D), zones peau ×9, zones brutes ×9, cellules ×3N, fond ×3]
+  const ML = 10, Z1 = 2 + ML, Z2 = Z1 + 9, CO = Z2 + 9;
+  const rowLen = CO + 3 * N + 3;
   const rows = [];
   for await (const { time, duration } of videoFrames(v, item.fps)) {
     const row = new Float32Array(rowLen).fill(NaN);
     row[0] = time;
     row[1] = 0;
-    const lm = face.detectForVideo(v, nextTs()).faceLandmarks?.[0];
+    const det = face.detectForVideo(v, nextTs());
+    const lm = det.faceLandmarks?.[0];
     if (lm) {
       row[1] = 1;
       const { w, h } = ex.size(v.videoWidth, v.videoHeight);
-      const fr = faceRegions(lm, w, h);
-      row.set(fr.motion, 2);
+      const fr = faceRegions(lm, w, h, det.facialTransformationMatrixes?.[0] ?? null);
+      row.set(fr.motion.slice(0, ML), 2);
       const m = ex.measure(v, v.videoWidth, v.videoHeight, fr.regions);
       m?.zones.forEach((z, i) => {
-        if (z) row.set([z.r, z.g, z.b], 9 + i * 3);
-        if (z?.raw) row.set([z.raw.r, z.raw.g, z.raw.b], 18 + i * 3);
+        if (z) row.set([z.r, z.g, z.b], Z1 + i * 3);
+        if (z?.raw) row.set([z.raw.r, z.raw.g, z.raw.b], Z2 + i * 3);
       });
-      row.set(grid.measure(v, v.videoWidth, v.videoHeight, lm), 27);
+      row.set(grid.measure(v, v.videoWidth, v.videoHeight, lm), CO);
       const bg = measureBackground(ex, fr);
-      if (bg) row.set([bg.r, bg.g, bg.b], 27 + 3 * N);
+      if (bg) row.set([bg.r, bg.g, bg.b], CO + 3 * N);
     }
     rows.push(row);
     if (rows.length % 150 === 0) status.progress = time / duration;
   }
   const bin = new Float32Array(rows.length * rowLen);
   rows.forEach((r, i) => bin.set(r, i * rowLen));
-  const header = { ...item, frames: rows.length, rowLen, bgOffset: 27 + 3 * N, grid: GRID, cells: grid.cells, cols: grid.cols, rows: grid.rows };
+  const header = { ...item, frames: rows.length, rowLen, motionLen: ML, zonesOffset: Z1, rawOffset: Z2, cellsOffset: CO, bgOffset: CO + 3 * N, grid: GRID, cells: grid.cells, cols: grid.cols, rows: grid.rows };
   await fetch(`/save?name=${encodeURIComponent(item.name)}.bin`, { method: 'POST', body: bin.buffer });
   await fetch(`/save?name=${encodeURIComponent(item.name)}.json`, { method: 'POST', body: JSON.stringify(header) });
 }

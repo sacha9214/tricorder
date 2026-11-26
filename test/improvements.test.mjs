@@ -273,3 +273,47 @@ test('lumière qui change : la référence de fond retire une lampe qui scintill
   assert.ok(near(withBg.bpm, 70, 2), `avec fond : ${withBg.bpm}`);
   assert.ok(!near(without.bpm, 70, 2) || without.snr < withBg.snr, `sans fond : ${without.bpm}`);
 });
+
+test('vérification par tapotement : rythme retrouvé malgré un double appui et un oubli', async () => {
+  const { tappedBpm } = await import('../js/check.js');
+  const times = [];
+  for (let i = 0; i < 20; i++) times.push(i * 0.8 + (i % 3) * 0.02); // 75 bpm, un peu irrégulier
+  times.splice(10, 0, times[9] + 0.1);   // double appui
+  times.splice(15, 1);                   // battement oublié
+  const r = tappedBpm(times);
+  assert.ok(near(r.bpm, 75, 2), `bpm=${r.bpm}`);
+  assert.equal(tappedBpm([0, 1, 2]), null);
+});
+
+test('mode doigt : pouls fort au rouge retrouvé, et refusé sans doigt', async () => {
+  const { fingerAnalyze, isFinger } = await import('../js/finger.js');
+  const rand = rng(5), s = [];
+  for (let i = 0; i < 12 * 30; i++) {
+    const t = i / 30, p = Math.sin(2 * Math.PI * 1.4 * t) + 0.4 * Math.sin(4 * Math.PI * 1.4 * t - 0.7);
+    s.push({ t, r: 200 * (1 - 0.02 * p) + gaussian(rand), g: 40 * (1 - 0.03 * p) + gaussian(rand), b: 30 + gaussian(rand) });
+  }
+  const r = fingerAnalyze(s);
+  assert.ok(near(r.bpm, 84, 2) && r.quality === 'good', `bpm=${r.bpm} q=${r.quality}`);
+  assert.ok(isFinger(200, 40, 30, 10));
+  assert.ok(!isFinger(150, 120, 100, 40), 'un visage n\'est pas un doigt');
+});
+
+test('délai du pouls entre deux ondes : 120 ms retrouvés', async () => {
+  const { pulseDelay } = await import('../js/delay.js');
+  const fs = 30, n = 360, a = new Float64Array(n), b = new Float64Array(n), rand = rng(8);
+  for (let i = 0; i < n; i++) {
+    const t = i / fs, w = (x) => Math.sin(2 * Math.PI * 1.2 * x) + 0.35 * Math.sin(4 * Math.PI * 1.2 * x - 0.8);
+    a[i] = w(t) + 0.05 * gaussian(rand);
+    b[i] = w(t - 0.12) + 0.05 * gaussian(rand);
+  }
+  const d = pulseDelay(a, b, fs);
+  assert.ok(near(d.ms, 120, 15) && d.corr > 0.9, JSON.stringify(d));
+});
+
+test('angles 3D de la tête depuis une matrice de rotation', async () => {
+  const { headAngles } = await import('../js/extract.js');
+  const yaw = 0.3; // rotation autour de y
+  const m = [Math.cos(yaw), 0, -Math.sin(yaw), 0, 0, 1, 0, 0, Math.sin(yaw), 0, Math.cos(yaw), 0, 0, 0, 0, 1];
+  const [pitch, y, roll] = headAngles(m);
+  assert.ok(near(y, 0.3, 1e-6) && near(pitch, 0, 1e-6) && near(roll, 0, 1e-6), JSON.stringify([pitch, y, roll]));
+});

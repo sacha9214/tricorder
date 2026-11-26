@@ -22,7 +22,17 @@ const lerp = (a, b, k) => add(a, mul(sub(b, a), k));
 // landmarks : coordonnées normalisées [0,1] → zones en pixels de travail.
 // motion : signaux de mouvement de la tête (pour la correction du mouvement), sans unité :
 // [x, y, échelle, inclinaison, rotation gauche-droite, hochement, ouverture de la bouche].
-export function faceRegions(landmarks, w, h) {
+// Angles 3D de la tête (radians) depuis la matrice de transformation de MediaPipe (4×4, colonnes) :
+// hochement (axe x), rotation gauche-droite (axe y), inclinaison (axe z).
+export function headAngles(matrix) {
+  const m = matrix?.data ?? matrix;
+  if (!m || m.length < 16) return null;
+  const r00 = m[0], r10 = m[1], r20 = m[2], r21 = m[6], r22 = m[10];
+  return [Math.atan2(r21, r22), Math.asin(Math.max(-1, Math.min(1, -r20))), Math.atan2(r10, r00)];
+}
+
+// matrix (optionnel) : matrice 3D de MediaPipe, convertie en angles (face.angles).
+export function faceRegions(landmarks, w, h, matrix = null) {
   const p = (i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h });
   const eyeA = p(L.eyeA), eyeB = p(L.eyeB);
   const d = len(sub(eyeB, eyeA)); // écart entre les yeux = échelle du visage
@@ -54,7 +64,11 @@ export function faceRegions(landmarks, w, h) {
     dot(sub(nose, eyeMid), uy) / d,
     len(sub(p(L.lipTop), p(L.lipBottom))) / d,
   ];
-  return { regions: [forehead, cheekA, cheekB], scale: d, nose, chin: p(L.chin), hull: faceHull(landmarks, w, h), motion };
+  // Angles 3D réels : testés comme signaux de mouvement supplémentaires sur les vraies vidéos en
+  // mouvement (TU/e P1 M1–M3) — aucun gain (78 % vs 77 % justes) : gardés à part, pas dans la
+  // correction.
+  const angles = headAngles(matrix);
+  return { regions: [forehead, cheekA, cheekB], scale: d, nose, chin: p(L.chin), hull: faceHull(landmarks, w, h), motion, angles };
 }
 
 // Contour du visage : enveloppe convexe des repères, resserrée de 8 % vers le centre
