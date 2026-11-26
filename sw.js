@@ -1,7 +1,7 @@
 // Service worker : le tricorder fonctionne hors ligne après une première visite.
 // Page et code : réseau d'abord (les mises à jour arrivent), copie en cache si hors ligne.
 // Modèles et code MediaPipe (vendor/) : immuables, servis depuis le cache dès qu'ils y sont.
-const CACHE = 'tricorder-v2';
+const CACHE = 'tricorder-v3';
 const SHELL = [
   './', 'index.html', 'bench.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/dsp.js', 'js/extract.js', 'js/skin.js', 'js/grid.js', 'js/frames.js', 'js/landmarker.js',

@@ -10,7 +10,7 @@ import { FaceGrid, featureSets } from './grid.js';
 import { videoFrames, measureFrame, detectFaces, measureFace } from './frames.js';
 import { Person } from './person.js';
 import { FingerSensor, fingerAnalyze } from './finger.js';
-import { setTorch, lockExposure, brighten } from './camera.js';
+import { setTorch, lockExposure, unlockExposure, exposureCollapsed, brighten } from './camera.js';
 import { pulseDelay } from './delay.js';
 import { tappedBpm, loadChecks, saveCheck, clearChecks, checksCsv, checkSummary } from './check.js';
 import { drawHistory, historyCsv, stats } from './history.js';
@@ -295,11 +295,18 @@ async function startCamera() {
   els.video.srcObject = stream;
   els.media.classList.add('mirror');
   if (!(await prepareModel(run))) return;
-  try { await els.video.play(); } catch (e) { console.error(e); }
   goLive('camera');
+  // Lancer la vidéo une fois visible : sur iPhone, une vidéo démarrée cachée peut rester noire.
+  try { await els.video.play(); } catch (e) { console.error(e); }
   startAnalysis();
   scheduleVideoFrame(run);
   manageExposure(run, stream.getVideoTracks()[0]);
+}
+
+// Luminosité moyenne de toute l'image (0–255), sur une petite copie.
+function frameLevel() {
+  const m = finger.measure(els.video);
+  return (m.r + m.g + m.b) / 3;
 }
 
 // Exposition : laisser l'automatique se régler 2,5 s, puis figer (si la caméra le permet) ;
@@ -307,7 +314,19 @@ async function startCamera() {
 async function manageExposure(run, track) {
   await new Promise((r) => setTimeout(r, 2500));
   if (run !== state.run) return;
+  const before = frameLevel();
   state.exposure = await lockExposure(track);
+  if (state.exposure === 'locked') {
+    // Filet de sécurité : si l'image s'assombrit nettement, on rend la main à l'automatique.
+    await new Promise((r) => setTimeout(r, 800));
+    if (run !== state.run) return;
+    if (exposureCollapsed(before, frameLevel())) {
+      await unlockExposure(track);
+      state.exposure = 'reverted';
+      resetPeople();
+      return;
+    }
+  }
   await new Promise((r) => setTimeout(r, 1500));
   if (run !== state.run) return;
   const s = P().samples[P().samples.length - 1];
@@ -358,12 +377,12 @@ async function startFinger() {
   if (run !== state.run) { stream.getTracks().forEach((tr) => tr.stop()); return; }
   state.stream = stream;
   els.video.srcObject = stream;
-  try { await els.video.play(); } catch (e) { console.error(e); }
-  state.finger.torch = await setTorch(stream.getVideoTracks()[0], true);
   state.mode = 'finger';
   els.stage.classList.add('live');
   els.fingerHint.hidden = false;
   updateView();
+  try { await els.video.play(); } catch (e) { console.error(e); }
+  state.finger.torch = await setTorch(stream.getVideoTracks()[0], true);
   setButtons();
   setStatus(state.finger.fallback ? 'status.fingerNoCam' : 'status.fingerNone');
   startAnalysis();
@@ -906,6 +925,13 @@ updateView();
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('service worker', e));
 }
+
+// Retour sur la page (téléphone verrouillé, autre appli) : la vidéo a pu être mise en pause.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && els.video.srcObject && els.video.paused) {
+    els.video.play().catch(() => {});
+  }
+});
 
 // Accès pour le débogage depuis la console.
 window.tricorder = { state, magnifier, recorder, startDemo, stop, P };

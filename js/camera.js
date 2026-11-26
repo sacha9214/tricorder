@@ -12,20 +12,37 @@ export async function setTorch(track, on) {
 }
 
 // Fige l'exposition et la balance des blancs à leurs valeurs actuelles (après quelques secondes
-// d'automatique, pour qu'elles se soient réglées sur la scène).
+// d'automatique, pour qu'elles se soient réglées sur la scène). On ne passe en manuel que si la
+// caméra donne la valeur actuelle : sur certains téléphones Android, « manuel » sans durée de pose
+// prend la plus courte possible et l'image devient noire.
 export async function lockExposure(track) {
   const c = caps(track), s = settings(track);
   const adv = {};
-  if (c.exposureMode?.includes?.('manual')) {
+  if (c.exposureMode?.includes?.('manual') && s.exposureTime > 0) {
     adv.exposureMode = 'manual';
-    if (s.exposureTime) adv.exposureTime = s.exposureTime;
+    adv.exposureTime = s.exposureTime;
   }
-  if (c.whiteBalanceMode?.includes?.('manual')) {
+  if (c.whiteBalanceMode?.includes?.('manual') && s.colorTemperature > 0) {
     adv.whiteBalanceMode = 'manual';
-    if (s.colorTemperature) adv.colorTemperature = s.colorTemperature;
+    adv.colorTemperature = s.colorTemperature;
   }
   if (!Object.keys(adv).length) return 'unsupported';
   try { await track.applyConstraints({ advanced: [adv] }); return 'locked'; } catch { return 'failed'; }
+}
+
+// Revient à l'automatique (si le verrouillage a assombri l'image).
+export async function unlockExposure(track) {
+  const c = caps(track);
+  const adv = {};
+  if (c.exposureMode?.includes?.('continuous')) adv.exposureMode = 'continuous';
+  if (c.whiteBalanceMode?.includes?.('continuous')) adv.whiteBalanceMode = 'continuous';
+  if (!Object.keys(adv).length) return false;
+  try { await track.applyConstraints({ advanced: [adv] }); return true; } catch { return false; }
+}
+
+// L'image s'est-elle effondrée après le verrouillage ? (luminosité moyenne 0–255 avant / après)
+export function exposureCollapsed(before, after) {
+  return after < 25 || after < 0.6 * before;
 }
 
 // Éclaircit l'image d'un cran (compensation d'exposition, sinon temps de pose ×1,5).

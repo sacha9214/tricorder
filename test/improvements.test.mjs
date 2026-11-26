@@ -317,3 +317,28 @@ test('angles 3D de la tête depuis une matrice de rotation', async () => {
   const [pitch, y, roll] = headAngles(m);
   assert.ok(near(y, 0.3, 1e-6) && near(pitch, 0, 1e-6) && near(roll, 0, 1e-6), JSON.stringify([pitch, y, roll]));
 });
+
+// Exposition : jamais de « manuel » sans valeur actuelle (image noire sur certains Android).
+test('exposure lock: no manual mode without a current value, revert when the image collapses', async () => {
+  const { lockExposure, unlockExposure, exposureCollapsed } = await import('../js/camera.js');
+  const fake = (caps, settings) => {
+    const applied = [];
+    return { applied, getCapabilities: () => caps, getSettings: () => settings, applyConstraints: async (c) => { applied.push(c); } };
+  };
+  const both = { exposureMode: ['continuous', 'manual'], whiteBalanceMode: ['continuous', 'manual'] };
+  // Le téléphone ne donne ni durée de pose ni température : on ne touche à rien.
+  const t1 = fake(both, { exposureMode: 'continuous' });
+  assert.equal(await lockExposure(t1), 'unsupported');
+  assert.equal(t1.applied.length, 0);
+  // Valeurs connues : on fige avec ces valeurs-là.
+  const t2 = fake(both, { exposureTime: 333, colorTemperature: 5000 });
+  assert.equal(await lockExposure(t2), 'locked');
+  assert.deepEqual(t2.applied[0].advanced[0], { exposureMode: 'manual', exposureTime: 333, whiteBalanceMode: 'manual', colorTemperature: 5000 });
+  // Retour à l'automatique.
+  assert.equal(await unlockExposure(t2), true);
+  assert.deepEqual(t2.applied[1].advanced[0], { exposureMode: 'continuous', whiteBalanceMode: 'continuous' });
+  // Détection de l'effondrement.
+  assert.equal(exposureCollapsed(120, 110), false);
+  assert.equal(exposureCollapsed(120, 60), true);
+  assert.equal(exposureCollapsed(30, 20), true);
+});
