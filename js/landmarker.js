@@ -32,6 +32,12 @@ function load(kind) {
 }
 
 export const loadLandmarker = () => load('face');
+
+// Listes de connexions de MediaPipe (yeux, sourcils, lèvres), pour la grille du visage.
+export async function faceLandmarkerClass() {
+  const { mod } = await vision();
+  return mod.FaceLandmarker;
+}
 export const loadHands = () => load('hands');
 export const loadPose = () => load('pose');
 

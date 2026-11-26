@@ -215,7 +215,12 @@ export function snrAt(power, df, f) {
 // tools/harmonic.mjs : sans contrôle, 26 à 33 valeurs doublées sur 40 sont affichées comme
 // fiables ; à 0,25, une seule. Les fausses divisions par deux, elles, tombent toujours
 // sous le seuil de qualité : elles masquent la valeur au lieu d'en afficher une fausse.
-export const HALF_RATIO = 0.25;
+export const HALF_RATIO_SYNTHETIC = 0.25;
+// Désactivé par défaut : sur 80 vraies vidéos (MCD-rPPG), le contrôle faisait plus de mal que de
+// bien — de fausses divisions par deux passaient pour fiables (erreurs de −40 à −60 bpm).
+// Sans lui : lectures affichées 40 % → 51 % à ≤ 1 % de lectures fausses (validation croisée).
+// Sur ces vraies vidéos la fondamentale domine toujours l'harmonique.
+export const HALF_RATIO = Infinity;
 
 function peakIndex(power, df) {
   const kLo = Math.ceil(HR_MIN / df), kHi = Math.floor(HR_MAX / df);
@@ -238,16 +243,23 @@ export function halfCheck(power, df, k, ratio = HALF_RATIO) {
 // Pic dans 42–180 bpm, contrôle des harmoniques, et SNR.
 // mask (optionnel) : spectre du mouvement dans [0, 1] ; les fréquences où la tête bouge
 // sont dévaluées pour le choix du pic (pas pour le SNR, qui reste honnête).
-export function estimate(x, fs = FS, { ratio = HALF_RATIO, mask = null, kappa = 4 } = {}) {
-  const { power, df } = spectrum(x, fs);
+// exclude : bandes de fréquences (Hz) à ignorer, pour un artefact connu d'une source vidéo
+// (ex. rythme des images clés d'un caméscope : 30 / 12 = 2,5 Hz).
+export function estimate(x, fs = FS, { ratio = HALF_RATIO, mask = null, kappa = 4, nfft = NFFT, exclude = null } = {}) {
+  const { power, df } = spectrum(x, fs, nfft);
+  if (exclude) for (const [lo, hi] of exclude) for (let i = Math.max(0, Math.floor(lo / df)); i <= Math.min(power.length - 1, Math.ceil(hi / df)); i++) power[i] = 0;
   const pick = mask ? power.map((v, i) => v / (1 + kappa * mask[i])) : power;
   const k = halfCheck(pick, df, peakIndex(pick, df), ratio);
   const f = refinePeak(power, k, df);
   return { f, bpm: f * 60, snr: snrAt(power, df, f), power, df };
 }
 
-export function qualityOf(snr) {
-  return snr >= SNR_GOOD ? 'good' : snr >= SNR_FAIR ? 'fair' : 'poor';
+// Seuils pour la grille du visage avec mémoire des cellules, calibrés sur vraies vidéos par
+// validation croisée entre personnes (tools/cv-score.mjs) : lectures fausses ≤ 1 %.
+export const GRID_THRESHOLDS = { good: 3.5, fair: 2.0 };
+
+export function qualityOf(snr, { good = SNR_GOOD, fair = SNR_FAIR } = {}) {
+  return snr >= good ? 'good' : snr >= fair ? 'fair' : 'poor';
 }
 
 // Rééchantillonne des vecteurs (ex. signaux de mouvement) sur la même grille que les couleurs.
@@ -276,12 +288,15 @@ function centered(x) {
 
 // Régresseurs de mouvement : chaque signal (position, échelle, rotations, bouche),
 // éventuellement son carré (les reflets et l'ombrage ne sont pas linéaires), normalisés.
-function motionRegressors(cols, { quad = true, band = true, fs = FS } = {}) {
+function motionRegressors(cols, { quad = true, band = true, fs = FS, deriv = false } = {}) {
   const feats = [];
   for (const c of cols) {
     const cc = centered(c);
     feats.push(cc);
     if (quad) feats.push(centered(Float64Array.from(cc, (v) => v * v)));
+    // Vitesse (différence d'une image à l'autre) : le flou et les reflets dépendent aussi de la
+    // vitesse du mouvement, pas seulement de la position.
+    if (deriv) feats.push(centered(Float64Array.from(cc, (v, i) => (i ? v - cc[i - 1] : 0))));
   }
   const out = [];
   for (const f of feats) {
@@ -325,6 +340,14 @@ export function regressOut(y, X, ridge = 0.05) {
   const out = Float64Array.from(y);
   for (let a = 0; a < k; a++) for (let i = 0; i < N; i++) out[i] -= beta[a] * X[a][i];
   return out;
+}
+
+// Valeur maximale d'un spectre normalisé à ±0,08 Hz d'une fréquence (spectre calculé avec NFFT).
+function peakShare(spec, df, f) {
+  const d = (FS / NFFT);
+  let m = 0;
+  for (let i = Math.max(0, Math.floor((f - 0.08) / d)); i <= Math.min(spec.length - 1, Math.ceil((f + 0.08) / d)); i++) m = Math.max(m, spec[i]);
+  return m;
 }
 
 // Spectre du mouvement (somme des spectres des régresseurs normalisés), ramené à [0, 1].
@@ -399,30 +422,40 @@ export function motionScore(cols) {
 // motion : correction du mouvement à partir des signaux de suivi (s.motion pour la tête,
 // s.zones[z].m pour une zone qui bouge à part, comme une main) ;
 // { domain: 'pulse' | 'rgb' | null, quad, mask, kappa } ; null = pas de correction.
-export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION } = {}) {
+// fusion : 'snr' (pondération par SNR linéaire au consensus, défaut), 'topk' (moyenne des K
+// meilleures zones), 'equal' (moyenne simple) ; nfftZone : taille de FFT par zone (plus petite
+// = plus rapide quand il y a beaucoup de zones, comme la grille du visage).
+// zoneWeights (optionnel) : fonction (SNR au consensus par zone) → poids, pour une pondération
+// qui garde une mémoire d'une fenêtre à l'autre (voir ZoneMemory).
+export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION, fusion = 'snr', topK = 10, nfftZone = NFFT, zoneWeights = null, thresholds = undefined, halfRatio = HALF_RATIO, exclude = null } = {}) {
   if (samples.length < 2) return { ready: false, progress: 0 };
   const span = samples[samples.length - 1].t - samples[0].t;
-  if (span < minWindow) return { ready: false, progress: Math.max(0, span / minWindow) };
+  // Tolérance de 0,1 s (jusqu à deux images partielles aux bords) : à 30 i/s, une fenêtre « de 12 s » fait rarement 12,000 s pile ;
+  // sans elle, window = minWindow faisait rejeter presque toutes les fenêtres.
+  if (span < minWindow - 0.1) return { ready: false, progress: Math.max(0, span / minWindow) };
   const tEnd = samples[samples.length - 1].t;
   const tStart = Math.max(samples[0].t, tEnd - window);
   const rs = resampleRange(samples, fs, tStart, tEnd);
 
-  let mc = null, mask = null, moving = false;
+  let mc = null, mask = null, moving = false, motionSpec = null;
   if (motion && samples[samples.length - 1].motion) {
     const cols = resampleColumns(samples, fs, tStart, tEnd, (s) => s.motion);
     moving = motionScore(cols) > 1;
+    // Spectre du mouvement de la tête (normalisé à 1) : sert à savoir si la fréquence retenue
+    // est celle du mouvement plutôt que celle du pouls.
+    if (moving) motionSpec = motionSpectrum(motionRegressors(cols, { quad: false, band: true, fs }), fs);
   }
   if (motion && samples[samples.length - 1].motion && (moving || !motion.gate)) {
     const cols = resampleColumns(samples, fs, tStart, tEnd, (s) => s.motion);
-    const X = motionRegressors(cols, { quad: motion.quad, band: true, fs });
+    const X = motionRegressors(cols, { quad: motion.quad, band: true, fs, deriv: motion.deriv });
     mc = {
       domain: motion.domain ?? null,
       X,
-      Xraw: motion.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs }) : [],
+      Xraw: motion.domain === 'rgb' ? motionRegressors(cols, { quad: motion.quad, band: false, fs, deriv: motion.deriv }) : [],
     };
-    if (motion.mask) mask = motionSpectrum(motionRegressors(cols, { quad: false, band: true, fs }), fs);
+    if (motion.mask) mask = motionSpec ?? motionSpectrum(motionRegressors(cols, { quad: false, band: true, fs }), fs);
   }
-  const est = (x) => estimate(x, fs, { mask, kappa: motion?.kappa ?? 4 });
+  const est = (x) => estimate(x, fs, { mask, kappa: motion?.kappa ?? 4, ratio: halfRatio, exclude });
 
   const green = est(pulseOf(rs, fs, 'green'));
   const combinedPulse = pulseOf(rs, fs, 'pos', mc);
@@ -430,7 +463,7 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
 
   let pulse = method === 'green' ? pulseOf(rs, fs, 'green') : combinedPulse;
   let used = method === 'green' ? 'green' : 'pos';
-  let zones = null;
+  let zones = null, agreement = null;
 
   const nz = samples[samples.length - 1].zones?.length ?? 0;
   if (method === 'fusion' && nz > 0) {
@@ -462,7 +495,7 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
         };
       }
       const p = pulseOf(resampleRange(list, fs, tStart, tEnd), fs, 'pos', zmc);
-      const e = est(p);
+      const e = estimate(p, fs, { mask, kappa: motion?.kappa ?? 4, nfft: nfftZone, ratio: halfRatio, exclude });
       parts.push({ p, e, sd: std(p) || 1 });
     }
     const valid = parts.filter(Boolean);
@@ -477,12 +510,22 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
       };
       let weights = parts.map((pt) => (pt ? 10 ** (pt.e.snr / 10) : 0));
       const first = est(mix(weights));
-      weights = parts.map((pt) => (pt ? 10 ** (snrAt(pt.e.power, pt.e.df, first.f) / 10) : 0));
+      const consensus = parts.map((pt) => (pt ? snrAt(pt.e.power, pt.e.df, first.f) : -Infinity));
+      if (zoneWeights) weights = zoneWeights(consensus);
+      else if (fusion === 'equal') weights = parts.map((pt) => (pt ? 1 : 0));
+      else if (fusion === 'topk') {
+        const cut = [...consensus].sort((x, y) => y - x)[Math.min(topK, consensus.length) - 1];
+        weights = consensus.map((c) => (c >= cut && c > -Infinity ? 1 : 0));
+      } else weights = consensus.map((c) => (c > -Infinity ? 10 ** (c / 10) : 0));
       const wsum = weights.reduce((a, b) => a + b, 0);
       pulse = mix(weights);
       used = 'fusion';
+      // Accord : part des zones présentes dont le pouls ressort à la fréquence retenue (SNR ≥ 0 dB).
+      // Un vrai pouls apparaît sur beaucoup de cellules à la fois ; un pic de bruit, sur quelques-unes.
+      const present = consensus.filter(Number.isFinite);
+      agreement = present.length ? present.filter((c) => c >= 0).length / present.length : 0;
       zones = parts.map((pt, k) =>
-        pt ? { bpm: pt.e.bpm, snr: snrAt(pt.e.power, pt.e.df, first.f), weight: weights[k] / wsum } : null,
+        pt ? { bpm: pt.e.bpm, snr: consensus[k], weight: weights[k] / wsum } : null,
       );
     }
   }
@@ -493,18 +536,44 @@ export function analyze(samples, { fs = FS, window = 12, minWindow = 8, method =
     t: tEnd,
     bpm: fin.bpm,
     snr: fin.snr,
-    quality: qualityOf(fin.snr),
+    quality: qualityOf(fin.snr, thresholds),
     wave: pulse,
     power: fin.power,
     df: fin.df,
     motionCorrected: !!mc,
     moving,
+    agreement,
+    // Part du mouvement de la tête à la fréquence retenue (0 = aucun, 1 = pic du mouvement).
+    motionAtPeak: motionSpec ? peakShare(motionSpec, fin.df, fin.f) : 0,
     method: used,
     zones,
     combinedBpm: combined.bpm,
     combinedSnr: combined.snr,
     greenBpm: green.bpm,
     greenSnr: green.snr,
+  };
+}
+
+// Mémoire de la qualité de chaque zone d'une fenêtre à l'autre : moyenne glissante du SNR au
+// consensus (en dB). Une zone qui portait bien le pouls il y a quelques secondes garde du poids
+// même si cette fenêtre-ci est bruitée, et inversement : la pondération suit moins le bruit.
+export class ZoneMemory {
+  constructor({ alpha = 0.2, floor = -10 } = {}) {
+    this.alpha = alpha;
+    this.floor = floor;
+    this.ema = null;
+  }
+
+  reset() { this.ema = null; }
+
+  // À passer comme zoneWeights à analyze.
+  weigh = (consensus) => {
+    if (!this.ema || this.ema.length !== consensus.length) this.ema = consensus.map(() => null);
+    return consensus.map((c, i) => {
+      const v = Number.isFinite(c) ? c : this.floor;
+      this.ema[i] = this.ema[i] === null ? v : this.ema[i] + this.alpha * (v - this.ema[i]);
+      return Number.isFinite(c) ? 10 ** (this.ema[i] / 10) : 0;
+    });
   };
 }
 
@@ -558,7 +627,7 @@ export class HrTracker {
 }
 
 // Analyse glissante d'un enregistrement complet (banc d'essai, tests).
-export function slidingAnalysis(samples, { step = 0.5, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION } = {}) {
+export function slidingAnalysis(samples, { step = 0.5, window = 12, minWindow = 8, method = 'fusion', motion = DEFAULT_MOTION, ...rest } = {}) {
   const out = [];
   if (samples.length < 2) return out;
   const t0 = samples[0].t, tLast = samples[samples.length - 1].t;
@@ -566,7 +635,7 @@ export function slidingAnalysis(samples, { step = 0.5, window = 12, minWindow = 
   for (let tEnd = t0 + minWindow; tEnd <= tLast + 1e-9; tEnd += step) {
     while (hi < samples.length && samples[hi].t <= tEnd + 1e-9) hi++;
     while (lo < hi && samples[lo].t < tEnd - window - 1e-9) lo++;
-    const r = analyze(samples.slice(lo, hi), { window, minWindow, method, motion });
+    const r = analyze(samples.slice(lo, hi), { window, minWindow, method, motion, ...rest });
     if (r.ready) out.push(r);
   }
   return out;

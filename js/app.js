@@ -1,11 +1,12 @@
 // Interface : sources (caméra, fichier, démo), boucle image par image, affichage,
 // amplification du pouls et enregistrement.
-import { analyze, HrTracker, HR_MIN, HR_MAX } from './dsp.js';
+import { analyze, HrTracker, ZoneMemory, GRID_THRESHOLDS, HR_MIN, HR_MAX } from './dsp.js';
 import { Extractor, tracePath, WORK_W, ZONES } from './extract.js';
 import { DemoFace } from './demo.js';
 import { Magnifier } from './magnify.js';
 import { Recorder, recordingName, download, MAX_SECONDS } from './recorder.js';
-import { loadLandmarker, loadHands, loadPose } from './landmarker.js';
+import { loadLandmarker, loadHands, loadPose, faceLandmarkerClass } from './landmarker.js';
+import { FaceGrid, featureSets } from './grid.js';
 import { videoFrames, measureFrame } from './frames.js';
 import { t, setLang, getLang, applyI18n } from './i18n.js';
 
@@ -14,6 +15,9 @@ const GAP_RESET_S = 0.5;   // trou plus long → on repart de zéro
 // Déplacement du nez sur 1 s, en fraction de l'écart des yeux. Le mouvement est corrigé ;
 // au-delà de ce seuil on prévient seulement que les mesures peuvent sauter.
 const MOTION_LIMIT = 0.3;
+// Grille détaillée du visage (~100 cellules) au lieu de 3 zones : choisie sur de vraies vidéos
+// (MCD-rPPG), voir README et tools/offline-score.mjs.
+const USE_GRID = true;
 const QUALITY_COLORS = { good: '#3ccf8e', fair: '#e9bd4c', poor: '#8794a1', none: '#e4e8ec' };
 
 const $ = (id) => document.getElementById(id);
@@ -37,11 +41,11 @@ const recorder = new Recorder();
 const state = {
   mode: 'idle', run: 0,
   samples: [], lastT: null, noFaceSince: null,
-  result: null, tracker: new HrTracker(), motion: [], frameTimes: [], pixels: 0, kept: 0,
+  result: null, tracker: new HrTracker(), zoneMemory: new ZoneMemory({ alpha: 0.1 }), motion: [], frameTimes: [], pixels: 0, kept: 0,
   stream: null, fileUrl: null, demo: null, demoTimer: null, analyzeTimer: null,
   landmarker: null, truth: null,
   magnify: false, gain: 50,
-  extras: { hands: false, body: false }, handsModel: null, poseModel: null,
+  extras: { hands: false, body: false }, handsModel: null, poseModel: null, grid: null,
   pending: null, // enregistrement terminé, pas encore enregistré : { blob, seconds, ext }
   statusKey: 'status.idle', statusVars: {}, statusError: false,
 };
@@ -56,7 +60,7 @@ function setStatus(key, vars = {}, error = false) {
 // ---------- Tampon d'échantillons ----------
 function resetBuffer() {
   state.samples = []; state.lastT = null; state.result = null;
-  state.tracker.reset(); state.motion = [];
+  state.tracker.reset(); state.zoneMemory.reset(); state.motion = [];
 }
 
 function pushSample(time, m, motion = null) {
@@ -96,6 +100,7 @@ const readingsPaused = () => state.mode === 'camera' && state.magnify;
 // ---------- Zones en option : mains et corps ----------
 const models = () => ({
   face: state.landmarker,
+  grid: USE_GRID ? state.grid : null,
   hands: state.extras.hands ? state.handsModel : null,
   pose: state.extras.body ? state.poseModel : null,
 });
@@ -260,6 +265,7 @@ async function prepareModel(run) {
   setStatus('status.loadingModel');
   try {
     state.landmarker = await loadLandmarker();
+    if (USE_GRID && !state.grid) state.grid = new FaceGrid(featureSets(await faceLandmarkerClass()));
     await loadExtras();
   } catch (e) {
     console.error(e);
@@ -385,7 +391,9 @@ function runAnalysis() {
     if (recorder.seconds >= MAX_SECONDS) finishRecording();
     setButtons();
   }
-  const r = analyze(state.samples);
+  const r = analyze(state.samples, USE_GRID
+    ? { nfftZone: 1024, zoneWeights: state.zoneMemory.weigh, thresholds: GRID_THRESHOLDS }
+    : {});
   state.result = r;
   if (r.ready) state.tracker.update(r);
   updateStatusFromResult(r);
@@ -416,6 +424,7 @@ function drawOverlay(regions, vw, vh, k) {
   const s = vw / 320;
   octx.lineWidth = Math.max(1.5, s);
   octx.setLineDash([6 * s, 4 * s]);
+  if (regions.length > 20) return drawHeatMap(regions, k, r);
   regions.forEach((reg, z) => {
     if (!reg) return;
     let q = 'none';
@@ -426,6 +435,30 @@ function drawOverlay(regions, vw, vh, k) {
     octx.strokeStyle = QUALITY_COLORS[q];
     tracePath(octx, reg, k);
     octx.stroke();
+  });
+}
+
+// Grille : chaque cellule teintée selon la qualité de son signal, d'autant plus opaque que
+// son poids dans la mesure est grand — une carte de l'endroit où le pouls se voit le mieux.
+function drawHeatMap(regions, k, r) {
+  let wmax = 0;
+  if (r?.ready && r.zones) for (const zn of r.zones) if (zn) wmax = Math.max(wmax, zn.weight);
+  octx.setLineDash([]);
+  regions.forEach((reg, z) => {
+    if (!reg) return;
+    const zn = r?.ready ? r.zones?.[z] : null;
+    tracePath(octx, reg, k);
+    if (!zn || !wmax) {
+      octx.strokeStyle = 'rgba(228,232,236,0.25)';
+      octx.lineWidth = 1;
+      octx.stroke();
+      return;
+    }
+    const q = zn.snr >= 2 ? 'good' : zn.snr >= 1 ? 'fair' : 'poor';
+    octx.globalAlpha = 0.22 + 0.5 * Math.sqrt(zn.weight / wmax);
+    octx.fillStyle = QUALITY_COLORS[q];
+    octx.fill();
+    octx.globalAlpha = 1;
   });
 }
 
@@ -491,7 +524,9 @@ function render() {
   const r = state.result;
   const shown = state.lastT !== null ? state.tracker.value(state.lastT) : null;
   els.bpm.textContent = shown !== null ? Math.round(shown) : '—';
-  els.bpm.classList.toggle('stale', shown !== null && r?.ready && r.quality === 'poor');
+  // Grisé si la mesure du moment n'est pas fiable, ou si la tête bouge : sur de vraies vidéos en
+  // mouvement, ~7 % des lectures « fiables » étaient fausses — le score de qualité ne suffit pas.
+  els.bpm.classList.toggle('stale', shown !== null && r?.ready && (r.quality === 'poor' || r.moving));
 
   const q = r?.ready ? r.quality : 'none';
   els.quality.dataset.q = q;
@@ -511,7 +546,14 @@ function render() {
       t('details.mixed', { v: `${r.combinedBpm.toFixed(1)}` }),
       t('details.green', { v: `${r.greenBpm.toFixed(1)}` }),
     ];
-    if (r.zones) {
+    if (r.zones && r.zones.length > 20 && state.grid) {
+      const N = state.grid.cells.length;
+      const cellW = r.zones.slice(0, N).filter(Boolean).map((zn) => zn.weight).sort((a, b) => b - a);
+      const top5 = cellW.slice(0, 5).reduce((a, b) => a + b, 0) / (cellW.reduce((a, b) => a + b, 0) || 1);
+      parts.push(t('details.grid', { n: cellW.length, p: Math.round(top5 * 100) }));
+      const extra = r.zones.slice(N).map((zn, j) => (zn ? `${t(`zone.${ZONES[3 + j]}`)} ${zn.snr.toFixed(1)} dB` : null)).filter(Boolean);
+      if (extra.length) parts.push(extra.join(', '));
+    } else if (r.zones) {
       const z = r.zones
         .map((zn, i) => (zn || i < 3 ? `${t(`zone.${ZONES[i]}`)} ${zn ? `${zn.snr.toFixed(1)} dB (${Math.round(zn.weight * 100)} %)` : '—'}` : null))
         .filter(Boolean);

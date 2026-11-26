@@ -1,17 +1,17 @@
 // Banc d'essai : analyse des enregistrements et comparaison des méthodes à la référence.
-import { slidingAnalysis, summarizeRun, median, DEFAULT_MOTION } from './dsp.js';
+import { slidingAnalysis, median, DEFAULT_MOTION, HrTracker, ZoneMemory, GRID_THRESHOLDS } from './dsp.js';
+import { FaceGrid, featureSets } from './grid.js';
 import { Extractor } from './extract.js';
-import { loadLandmarker } from './landmarker.js';
+import { loadLandmarker, faceLandmarkerClass } from './landmarker.js';
 import { videoFrames, measureFrame } from './frames.js';
 
 // Méthodes comparées, de la plus simple (v0) à la chaîne complète.
 const METHODS = [
   { id: 'green', label: 'Green only', source: 'raw', method: 'green', motion: null, tracked: false },
   { id: 'v0', label: 'POS, all pixels (v0)', source: 'raw', method: 'pos', motion: null, tracked: false },
-  { id: 'skin', label: '+ skin filter', source: 'skin', method: 'pos', motion: null, tracked: false },
-  { id: 'zones', label: '+ zone fusion', source: 'skin', method: 'fusion', motion: null, tracked: false },
-  { id: 'motion', label: '+ motion correction', source: 'skin', method: 'fusion', motion: DEFAULT_MOTION, tracked: false },
-  { id: 'full', label: '+ tracking (full)', source: 'skin', method: 'fusion', motion: DEFAULT_MOTION, tracked: true },
+  { id: 'zones', label: '3 zones, fusion', source: 'zones3', method: 'fusion', motion: DEFAULT_MOTION, tracked: false },
+  { id: 'grid', label: 'Face grid + memory', source: 'grid', method: 'fusion', motion: DEFAULT_MOTION, tracked: false },
+  { id: 'full', label: '+ tracking (full)', source: 'grid', method: 'fusion', motion: DEFAULT_MOTION, tracked: true },
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -126,7 +126,7 @@ function drawBlandAltman() {
   ctx.fillText(`bias ${bias >= 0 ? '+' : ''}${bias.toFixed(1)} bpm · limits ${(bias - 1.96 * sd).toFixed(1)} to ${(bias + 1.96 * sd).toFixed(1)}`, L + 6, T + 12);
 }
 
-async function analyzeRow(row, landmarker, extractor, video) {
+async function analyzeRow(row, landmarker, extractor, video, grid) {
   const url = URL.createObjectURL(row.file);
   try {
     video.src = url;
@@ -135,16 +135,31 @@ async function analyzeRow(row, landmarker, extractor, video) {
     let frames = 0, faces = 0;
     for await (const { time, duration } of videoFrames(video)) {
       frames++;
-      const res = measureFrame(video, video.videoWidth, video.videoHeight, { face: landmarker }, extractor);
+      const res = measureFrame(video, video.videoWidth, video.videoHeight, { face: landmarker, grid }, extractor);
       if (res) faces++;
-      if (res?.m) samples.push({ t: time, r: res.m.r, g: res.m.g, b: res.m.b, zones: res.m.zones, raw: res.m.raw, motion: res.face.motion });
+      if (res?.m) samples.push({ t: time, r: res.m.r, g: res.m.g, b: res.m.b, zones: res.m.zones, zones3: res.m.faceZones, raw: res.m.raw, motion: res.face.motion });
       if (frames % 15 === 0) { row.status = `${Math.round((100 * time) / duration)} %`; renderRows(); }
     }
     row.faceShare = frames ? faces / frames : 0;
     for (const m of METHODS) {
-      const src = m.source === 'raw' ? samples.map((s) => ({ t: s.t, ...s.raw })) : samples;
-      const res = slidingAnalysis(src, { method: m.method, motion: m.motion });
-      row.results[m.id] = summarizeRun(res, { tracked: m.tracked });
+      const src = m.source === 'raw' ? samples.map((s) => ({ t: s.t, ...s.raw }))
+        : m.source === 'zones3' ? samples.filter((s) => s.zones3?.some(Boolean)).map((s) => {
+          const ok = s.zones3.filter(Boolean);
+          const avg = (c) => ok.reduce((a, z) => a + z[c], 0) / ok.length;
+          return { t: s.t, r: avg('r'), g: avg('g'), b: avg('b'), zones: s.zones3, motion: s.motion };
+        })
+        : samples;
+      const grid = m.source === 'grid';
+      const opts = { method: m.method, motion: m.motion, ...(grid ? { nfftZone: 1024, zoneWeights: new ZoneMemory({ alpha: 0.1 }).weigh, thresholds: GRID_THRESHOLDS } : {}) };
+      const res = slidingAnalysis(src, opts);
+      // Valeur affichée par fenêtre (avec ou sans suivi), puis médiane et part du temps couvert.
+      const tracker = new HrTracker();
+      const values = [];
+      for (const r of res) {
+        if (m.tracked) { tracker.update(r); const v = tracker.value(r.t); if (v !== null) values.push(v); }
+        else if (r.quality !== 'poor') values.push(r.bpm);
+      }
+      row.results[m.id] = { bpm: median(values), coverage: res.length ? values.length / res.length : 0 };
     }
     const dur = samples.length ? samples[samples.length - 1].t - samples[0].t : 0;
     row.status = `done · ${dur.toFixed(0)} s · face ${Math.round(row.faceShare * 100)} %`;
@@ -180,8 +195,9 @@ $('run').addEventListener('click', async () => {
     return;
   }
   const extractor = new Extractor();
+  const grid = new FaceGrid(featureSets(await faceLandmarkerClass()));
   for (const row of pending) {
-    await analyzeRow(row, landmarker, extractor, $('video'));
+    await analyzeRow(row, landmarker, extractor, $('video'), grid);
     renderRows();
     renderSummary();
   }

@@ -56,5 +56,23 @@ export function measureFrame(source, w, h, models, extractor) {
     // Toujours 10 emplacements quand les options sont actives : une zone garde son indice.
     regions = ZONES.map((name, i) => (i < FACE_ZONES ? face.regions[i] : extra[name] ?? null));
   }
-  return { face, regions, m: extractor.measure(source, w, h, regions) };
+  const m = extractor.measure(source, w, h, regions);
+  if (!models.grid) return { face, regions, m };
+  // Grille détaillée : les cellules remplacent les 3 zones du visage ; les zones en option
+  // (mains, corps) restent à la suite. Les zones du visage servent encore de référence de
+  // couleur de peau pour écarter les zones habillées.
+  const vals = models.grid.measure(source, w, h, lm);
+  const N = models.grid.cells.length;
+  const cells = [];
+  for (let n = 0; n < N; n++) cells.push(Number.isNaN(vals[n * 3]) ? null : { r: vals[n * 3], g: vals[n * 3 + 1], b: vals[n * 3 + 2], n: 1 });
+  const ok = cells.filter(Boolean);
+  if (!ok.length) return { face, regions: models.grid.cellRegions(ww / w), m: null };
+  const avg = (c) => ok.reduce((a, z) => a + z[c], 0) / ok.length;
+  const zones = [...cells, ...(m?.zones.slice(FACE_ZONES) ?? regions.slice(FACE_ZONES).map(() => null))];
+  const cellRegs = models.grid.cellRegions(ww / w);
+  return {
+    face,
+    regions: [...cellRegs, ...regions.slice(FACE_ZONES)],
+    m: { r: avg('r'), g: avg('g'), b: avg('b'), zones, faceZones: m?.zones.slice(0, FACE_ZONES) ?? null, raw: m?.raw ?? { r: avg('r'), g: avg('g'), b: avg('b') }, pixels: ok.length, kept: 1, clipped: m?.clipped ?? 0 },
+  };
 }

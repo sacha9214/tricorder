@@ -7,10 +7,13 @@ import { SkinFilter } from '../js/skin.js';
 
 const near = (a, b, tol) => Math.abs(a - b) < tol;
 
-test('harmonique plus forte que la fondamentale : on lit 60, pas 120', () => {
+// Le contrôle est désactivé par défaut (nuisible sur vraies vidéos) ; on vérifie qu'il marche
+// toujours quand on l'active explicitement.
+test('harmonique plus forte que la fondamentale : avec le contrôle activé, on lit 60, pas 120', async () => {
+  const { HALF_RATIO_SYNTHETIC } = await import('../js/dsp.js');
   let ok = 0, rawWrong = 0;
   for (let seed = 1; seed <= 10; seed++) {
-    const r = analyze(synthSamples({ bpm: 60, harmonic: 1.4, noise: 0.2, seed }));
+    const r = analyze(synthSamples({ bpm: 60, harmonic: 1.4, noise: 0.2, seed }), { halfRatio: HALF_RATIO_SYNTHETIC });
     if (near(r.bpm, 60, 2)) ok++;
     // Pic brut (sans score harmonique) : doit tomber sur 120, sinon le test ne prouve rien.
     let k = Math.ceil(HR_MIN / r.df);
@@ -211,4 +214,30 @@ test('zones en option : manche écartée, paume plus claire gardée', async () =
   assert.ok(zones[3], 'la paume doit rester');
   assert.equal(zones[6], null);
   assert.equal(zones[7], null);
+});
+
+test('mémoire des zones : une zone bonne longtemps garde du poids sur une fenêtre bruitée', async () => {
+  const { ZoneMemory } = await import('../js/dsp.js');
+  const mem = new ZoneMemory({ alpha: 0.2 });
+  for (let i = 0; i < 20; i++) mem.weigh([6, -4, 2]);        // zone 0 bonne, zone 1 mauvaise
+  const w = mem.weigh([-4, 6, 2]);                            // une fenêtre où tout s'inverse
+  assert.ok(w[0] > w[1], `la zone 0 doit rester devant : ${w.map((x) => x.toFixed(2))}`);
+  assert.equal(mem.weigh([-Infinity, 1, 1])[0], 0, 'zone absente : poids nul');
+});
+
+test('seuils de qualité réglables (grille calibrée sur vraies vidéos)', () => {
+  const s = synthSamples({ bpm: 70, noise: 0.6, seed: 4 });
+  const strict = analyze(s, { thresholds: { good: 99, fair: 98 } });
+  const loose = analyze(s, { thresholds: { good: -99, fair: -99 } });
+  assert.equal(strict.quality, 'poor');
+  assert.equal(loose.quality, 'good');
+});
+
+test('part du mouvement à la fréquence retenue : présente seulement quand la tête bouge', () => {
+  const still = analyze(synthMotion({ motion: 'still', bpm: 80, seed: 2, seconds: 12 }));
+  const ex = analyze(synthMotion({ motion: 'exercise', bpm: 128, cadence: 1.55, seed: 2, seconds: 12 }));
+  assert.equal(still.motionAtPeak, 0);
+  assert.equal(still.moving, false);
+  assert.ok(ex.moving);
+  assert.ok(ex.motionAtPeak >= 0 && ex.motionAtPeak <= 1);
 });
