@@ -21,6 +21,8 @@ export async function lockExposure(track) {
   if (c.exposureMode?.includes?.('manual') && s.exposureTime > 0) {
     adv.exposureMode = 'manual';
     adv.exposureTime = s.exposureTime;
+    // En manuel, la sensibilité doit être fixée aussi, sinon certaines caméras prennent la plus basse.
+    if (c.iso && s.iso > 0) adv.iso = s.iso;
   }
   if (c.whiteBalanceMode?.includes?.('manual') && s.colorTemperature > 0) {
     adv.whiteBalanceMode = 'manual';

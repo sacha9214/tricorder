@@ -334,6 +334,10 @@ test('exposure lock: no manual mode without a current value, revert when the ima
   const t2 = fake(both, { exposureTime: 333, colorTemperature: 5000 });
   assert.equal(await lockExposure(t2), 'locked');
   assert.deepEqual(t2.applied[0].advanced[0], { exposureMode: 'manual', exposureTime: 333, whiteBalanceMode: 'manual', colorTemperature: 5000 });
+  // La sensibilité est figée avec l'exposition quand la caméra la donne.
+  const t3 = fake({ ...both, iso: { min: 50, max: 3200 } }, { exposureTime: 333, iso: 400 });
+  await lockExposure(t3);
+  assert.equal(t3.applied[0].advanced[0].iso, 400);
   // Retour à l'automatique.
   assert.equal(await unlockExposure(t2), true);
   assert.deepEqual(t2.applied[1].advanced[0], { exposureMode: 'continuous', whiteBalanceMode: 'continuous' });

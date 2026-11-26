@@ -310,24 +310,36 @@ function frameLevel() {
 }
 
 // Exposition : laisser l'automatique se régler 2,5 s, puis figer (si la caméra le permet) ;
-// si le visage est très sombre, éclaircir d'un cran puis figer à nouveau. Expérimental.
+// si le visage est très sombre, éclaircir d'un cran. Expérimental.
+// Pas de verrouillage sur Android : en « manuel », Chrome/Android peut aussi figer la sensibilité
+// au minimum et l'image devient presque noire (constaté sur le téléphone d'un testeur).
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+
 async function manageExposure(run, track) {
-  await new Promise((r) => setTimeout(r, 2500));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await wait(2500);
   if (run !== state.run) return;
-  const before = frameLevel();
-  state.exposure = await lockExposure(track);
-  if (state.exposure === 'locked') {
-    // Filet de sécurité : si l'image s'assombrit nettement, on rend la main à l'automatique.
-    await new Promise((r) => setTimeout(r, 800));
-    if (run !== state.run) return;
-    if (exposureCollapsed(before, frameLevel())) {
-      await unlockExposure(track);
-      state.exposure = 'reverted';
-      resetPeople();
-      return;
+  if (IS_ANDROID) {
+    state.exposure = 'phone';
+  } else {
+    const before = frameLevel();
+    state.exposure = await lockExposure(track);
+    if (state.exposure === 'locked') {
+      // Filet de sécurité : si l'image s'assombrit nettement (vérifié deux fois, la caméra met
+      // un moment à appliquer le réglage), on rend la main à l'automatique.
+      for (const ms of [800, 1200]) {
+        await wait(ms);
+        if (run !== state.run) return;
+        if (exposureCollapsed(before, frameLevel())) {
+          await unlockExposure(track);
+          state.exposure = 'reverted';
+          resetPeople();
+          return;
+        }
+      }
     }
   }
-  await new Promise((r) => setTimeout(r, 1500));
+  await wait(1500);
   if (run !== state.run) return;
   const s = P().samples[P().samples.length - 1];
   if (s && (s.r + s.g + s.b) / 3 < 70 && (await brighten(track))) {
